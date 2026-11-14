@@ -9,13 +9,11 @@ const updater_1 = require("./updater");
 const scanner_1 = require("./scanner");
 function activate(context) {
     const provider = new issuesViewProvider_1.IssuesViewProvider(context.extensionUri, context);
-    // Đăng ký cho tất cả các view container: Activity Bar, Explorer, Source Control (và legacy IDs để phòng ngừa cache cũ)
+    // Đăng ký cho tất cả các view container: Activity Bar, Explorer, Source Control
     const viewTypes = [
         issuesViewProvider_1.IssuesViewProvider.viewType,
         issuesViewProvider_1.IssuesViewProvider.explorerViewType,
-        'claudeSessionManager.explorerView',
-        issuesViewProvider_1.IssuesViewProvider.scmViewType,
-        'claudeSessionManager.scmView'
+        issuesViewProvider_1.IssuesViewProvider.scmViewType
     ];
     for (const vt of viewTypes) {
         context.subscriptions.push(vscode.window.registerWebviewViewProvider(vt, provider, {
@@ -24,23 +22,39 @@ function activate(context) {
     }
     // Cập nhật context keys khi cài đặt thay đổi
     const updateContexts = () => {
-        const config = vscode.workspace.getConfiguration('claudeSessionManager');
+        const config = vscode.workspace.getConfiguration('antigravitySessionManager');
         const showExplorer = config.get('showInExplorer', true);
         const showScm = config.get('showInSourceControl', true);
-        vscode.commands.executeCommand('setContext', 'claudeSessionManager.showInExplorer', showExplorer);
-        vscode.commands.executeCommand('setContext', 'claudeSessionManager.showInSourceControl', showScm);
+        vscode.commands.executeCommand('setContext', 'antigravitySessionManager.showInExplorer', showExplorer);
+        vscode.commands.executeCommand('setContext', 'antigravitySessionManager.showInSourceControl', showScm);
     };
     updateContexts();
-    context.subscriptions.push(vscode.commands.registerCommand('claudeSessionManager.focusView', () => {
-        vscode.commands.executeCommand('claudeSessionManager.issuesView.focus');
+    context.subscriptions.push(vscode.commands.registerCommand('antigravitySessionManager.focusView', () => {
+        vscode.commands.executeCommand('antigravitySessionManager.issuesView.focus');
     }));
-    context.subscriptions.push(vscode.commands.registerCommand('claudeSessionManager.openTab', (tab) => {
-        vscode.commands.executeCommand('claudeSessionManager.issuesView.focus');
+    context.subscriptions.push(vscode.commands.registerCommand('antigravitySessionManager.openTab', (tab) => {
+        vscode.commands.executeCommand('antigravitySessionManager.issuesView.focus');
         const targetTab = tab === 'active' ? 'today' : tab;
         provider.switchTab(targetTab);
     }));
-    context.subscriptions.push(vscode.commands.registerCommand('claudeSessionManager.statusMenu', async () => {
+    context.subscriptions.push(vscode.commands.registerCommand('antigravitySessionManager.newSession', async () => {
+        try {
+            await vscode.commands.executeCommand('antigravity.startNewConversation');
+        }
+        catch {
+            try {
+                await vscode.commands.executeCommand('antigravity.panel.focus');
+            }
+            catch { }
+        }
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand('antigravitySessionManager.statusMenu', async () => {
         const items = [
+            {
+                label: '$(add) Cuộc trò chuyện mới',
+                description: 'Mở phiên làm việc Antigravity mới',
+                action: 'newSession'
+            },
             {
                 label: '$(calendar) Hôm nay',
                 description: 'Xem toàn bộ task phát sinh hôm nay (gồm đang chạy, chờ duyệt và hoàn thành)',
@@ -52,7 +66,7 @@ function activate(context) {
                 tab: 'all'
             },
             {
-                label: '$(folder-opened) Chọn thư mục lưu trữ Claude (~/.claude/projects)...',
+                label: '$(folder-opened) Chọn thư mục lưu trữ Antigravity (~/.gemini/antigravity)...',
                 description: 'Duyệt và chọn thư mục lưu trữ thay vì gõ đường dẫn',
                 action: 'browseStorage'
             },
@@ -63,32 +77,35 @@ function activate(context) {
             },
             {
                 label: '$(gear) Cài đặt cấu hình',
-                description: 'Mở thiết lập Claude Session Manager',
+                description: 'Mở thiết lập Antigravity Session Manager',
                 action: 'settings'
             }
         ];
         const selected = await vscode.window.showQuickPick(items, {
-            placeHolder: 'Chuyển nhanh tab hoặc thao tác'
+            placeHolder: 'Chuyển nhanh tab hoặc thao tác Antigravity'
         });
         if (!selected)
             return;
-        if (selected.action === 'settings') {
-            vscode.commands.executeCommand('workbench.action.openSettings', 'claudeSessionManager');
+        if (selected.action === 'newSession') {
+            vscode.commands.executeCommand('antigravitySessionManager.newSession');
+        }
+        else if (selected.action === 'settings') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'antigravitySessionManager');
         }
         else if (selected.action === 'browseStorage') {
-            vscode.commands.executeCommand('claudeSessionManager.browseStoragePath');
+            vscode.commands.executeCommand('antigravitySessionManager.browseStoragePath');
         }
         else if (selected.action === 'browseWorkspace') {
-            vscode.commands.executeCommand('claudeSessionManager.browseWorkspaceRoot');
+            vscode.commands.executeCommand('antigravitySessionManager.browseWorkspaceRoot');
         }
         else if (selected.tab) {
-            vscode.commands.executeCommand('claudeSessionManager.issuesView.focus');
+            vscode.commands.executeCommand('antigravitySessionManager.issuesView.focus');
             provider.switchTab(selected.tab);
         }
     }));
-    context.subscriptions.push(vscode.commands.registerCommand('claudeSessionManager.browseStoragePath', async () => {
-        const config = vscode.workspace.getConfiguration('claudeSessionManager');
-        const currentPath = config.get('storagePath') || '~/.claude/projects';
+    context.subscriptions.push(vscode.commands.registerCommand('antigravitySessionManager.browseStoragePath', async () => {
+        const config = vscode.workspace.getConfiguration('antigravitySessionManager');
+        const currentPath = config.get('storagePath') || '~/.gemini/antigravity';
         const resolved = scanner_1.SessionScanner.resolveHomePath(currentPath);
         const defaultUri = fs.existsSync(resolved) ? vscode.Uri.file(resolved) : undefined;
         const selected = await vscode.window.showOpenDialog({
@@ -96,18 +113,18 @@ function activate(context) {
             canSelectFolders: true,
             canSelectMany: false,
             openLabel: 'Chọn thư mục lưu trữ (Select Storage Folder)',
-            title: 'Chọn thư mục chứa lịch sử hội thoại Claude (~/.claude/projects)',
+            title: 'Chọn thư mục chứa lịch sử hội thoại Antigravity (~/.gemini/antigravity)',
             defaultUri
         });
         if (selected && selected[0]) {
             await config.update('storagePath', selected[0].fsPath, vscode.ConfigurationTarget.Global);
-            vscode.window.showInformationMessage(`Đã cập nhật thư mục lưu trữ: ${selected[0].fsPath}`);
+            vscode.window.showInformationMessage(`Đã cập nhật thư mục lưu trữ Antigravity: ${selected[0].fsPath}`);
             provider.setupRealtimeWatchers();
             provider.refresh();
         }
     }));
-    context.subscriptions.push(vscode.commands.registerCommand('claudeSessionManager.browseWorkspaceRoot', async () => {
-        const config = vscode.workspace.getConfiguration('claudeSessionManager');
+    context.subscriptions.push(vscode.commands.registerCommand('antigravitySessionManager.browseWorkspaceRoot', async () => {
+        const config = vscode.workspace.getConfiguration('antigravitySessionManager');
         const currentPath = config.get('workspaceRoot');
         const resolved = currentPath ? scanner_1.SessionScanner.resolveHomePath(currentPath) : undefined;
         const defaultUri = (resolved && fs.existsSync(resolved))
@@ -128,44 +145,44 @@ function activate(context) {
             provider.refresh();
         }
     }));
-    context.subscriptions.push(vscode.commands.registerCommand('claudeSessionManager.toggleExplorerView', async () => {
-        const config = vscode.workspace.getConfiguration('claudeSessionManager');
+    context.subscriptions.push(vscode.commands.registerCommand('antigravitySessionManager.toggleExplorerView', async () => {
+        const config = vscode.workspace.getConfiguration('antigravitySessionManager');
         const current = config.get('showInExplorer', true);
         const next = !current;
         await config.update('showInExplorer', next, vscode.ConfigurationTarget.Global);
         vscode.window.showInformationMessage(next
-            ? 'Đã bật hiển thị Claude Sessions trong thanh Explorer (File Tree).'
-            : 'Đã tắt hiển thị Claude Sessions khỏi thanh Explorer.');
+            ? 'Đã bật hiển thị Antigravity Sessions trong thanh Explorer (File Tree).'
+            : 'Đã tắt hiển thị Antigravity Sessions khỏi thanh Explorer.');
     }));
-    context.subscriptions.push(vscode.commands.registerCommand('claudeSessionManager.toggleSourceControlView', async () => {
-        const config = vscode.workspace.getConfiguration('claudeSessionManager');
+    context.subscriptions.push(vscode.commands.registerCommand('antigravitySessionManager.toggleSourceControlView', async () => {
+        const config = vscode.workspace.getConfiguration('antigravitySessionManager');
         const current = config.get('showInSourceControl', true);
         const next = !current;
         await config.update('showInSourceControl', next, vscode.ConfigurationTarget.Global);
         vscode.window.showInformationMessage(next
-            ? 'Đã bật hiển thị Claude Sessions trong thanh Source Control (Git).'
-            : 'Đã tắt hiển thị Claude Sessions khỏi thanh Source Control.');
+            ? 'Đã bật hiển thị Antigravity Sessions trong thanh Source Control (Git).'
+            : 'Đã tắt hiển thị Antigravity Sessions khỏi thanh Source Control.');
     }));
-    context.subscriptions.push(vscode.commands.registerCommand('claudeSessionManager.refresh', () => {
+    context.subscriptions.push(vscode.commands.registerCommand('antigravitySessionManager.refresh', () => {
         provider.refresh();
     }));
-    context.subscriptions.push(vscode.commands.registerCommand('claudeSessionManager.openSettings', () => {
-        vscode.commands.executeCommand('workbench.action.openSettings', 'claudeSessionManager');
+    context.subscriptions.push(vscode.commands.registerCommand('antigravitySessionManager.openSettings', () => {
+        vscode.commands.executeCommand('workbench.action.openSettings', 'antigravitySessionManager');
     }));
-    context.subscriptions.push(vscode.commands.registerCommand('claudeSessionManager.checkForUpdates', () => {
+    context.subscriptions.push(vscode.commands.registerCommand('antigravitySessionManager.checkForUpdates', () => {
         updater_1.ExtensionUpdater.checkForUpdates(context, true);
     }));
     // Lắng nghe cấu hình thay đổi để cập nhật tự động
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
-        if (e.affectsConfiguration('claudeSessionManager.showInExplorer') ||
-            e.affectsConfiguration('claudeSessionManager.showInSourceControl')) {
+        if (e.affectsConfiguration('antigravitySessionManager.showInExplorer') ||
+            e.affectsConfiguration('antigravitySessionManager.showInSourceControl')) {
             updateContexts();
         }
-        if (e.affectsConfiguration('claudeSessionManager')) {
+        if (e.affectsConfiguration('antigravitySessionManager')) {
             provider.refresh();
         }
     }));
-    // Tự động làm mới khi người dùng mở lại máy (wake from sleep) hoặc focus vào VS Code
+    // Tự động làm mới khi focus vào cửa sổ
     context.subscriptions.push(vscode.window.onDidChangeWindowState(e => {
         if (e.focused) {
             provider.refresh();

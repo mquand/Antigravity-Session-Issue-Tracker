@@ -8,7 +8,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 class ExtensionUpdater {
-    static GITHUB_REPO = 'mquand/Claude-Session-Manager-';
+    static GITHUB_REPO = 'mquand/Antigravity-Session-Issue-Tracker';
     static async checkForUpdates(context, manual = false) {
         const currentVersion = context.extension.packageJSON.version || '0.0.0';
         try {
@@ -38,7 +38,7 @@ class ExtensionUpdater {
                 }
                 return;
             }
-            const choice = await vscode.window.showInformationMessage(`Đã có bản cập nhật mới v${latestVersion} cho Claude Session Manager! (Hiện tại: v${currentVersion})`, 'Cập nhật ngay', 'Xem chi tiết', 'Để sau');
+            const choice = await vscode.window.showInformationMessage(`Đã có bản cập nhật mới v${latestVersion} cho Antigravity Session Manager! (Hiện tại: v${currentVersion})`, 'Cập nhật ngay', 'Xem chi tiết', 'Để sau');
             if (choice === 'Xem chi tiết') {
                 vscode.env.openExternal(vscode.Uri.parse(release.html_url));
             }
@@ -57,7 +57,7 @@ class ExtensionUpdater {
         const destPath = path.join(tempDir, fileName);
         await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
-            title: `Đang cập nhật Claude Session Manager lên v${targetVersion}...`,
+            title: `Đang cập nhật Antigravity Session Manager lên v${targetVersion}...`,
             cancellable: false
         }, async (progress) => {
             progress.report({ increment: 0, message: 'Đang tải file cài đặt từ GitHub...' });
@@ -87,62 +87,69 @@ class ExtensionUpdater {
             const options = {
                 hostname: 'api.github.com',
                 path: `/repos/${this.GITHUB_REPO}/releases/latest`,
+                method: 'GET',
                 headers: {
-                    'User-Agent': 'VSCode-Claude-Session-Manager',
-                    'Accept': 'application/vnd.github.v3+json'
+                    'User-Agent': 'Antigravity-Session-Manager-VSCode-Extension'
                 }
             };
-            https.get(options, (res) => {
-                if (res.statusCode === 404) {
-                    return resolve(null);
-                }
-                if (res.statusCode !== 200) {
-                    return reject(new Error(`GitHub API HTTP ${res.statusCode}`));
-                }
+            const req = https.request(options, (res) => {
                 let data = '';
-                res.on('data', chunk => data += chunk);
+                res.on('data', (chunk) => { data += chunk; });
                 res.on('end', () => {
-                    try {
-                        resolve(JSON.parse(data));
+                    if (res.statusCode === 200) {
+                        try {
+                            resolve(JSON.parse(data));
+                        }
+                        catch (e) {
+                            reject(e);
+                        }
                     }
-                    catch (e) {
-                        reject(e);
+                    else if (res.statusCode === 404) {
+                        resolve(null);
+                    }
+                    else {
+                        reject(new Error(`GitHub API returned status ${res.statusCode}`));
                     }
                 });
-            }).on('error', reject);
+            });
+            req.on('error', (e) => reject(e));
+            req.end();
         });
     }
-    static downloadWithRedirects(url, destPath, maxRedirects = 5) {
+    static downloadWithRedirects(url, dest, maxRedirects = 5) {
         return new Promise((resolve, reject) => {
             if (maxRedirects <= 0) {
-                return reject(new Error('Quá nhiều lần chuyển hướng'));
+                return reject(new Error('Quá nhiều chuyển hướng (redirect) khi tải file.'));
             }
-            const client = url.startsWith('https:') ? https : http;
-            client.get(url, { headers: { 'User-Agent': 'VSCode-Claude-Session-Manager' } }, (res) => {
-                if (res.statusCode && [301, 302, 307, 308].includes(res.statusCode) && res.headers.location) {
-                    return resolve(this.downloadWithRedirects(res.headers.location, destPath, maxRedirects - 1));
+            const client = url.startsWith('https') ? https : http;
+            client.get(url, { headers: { 'User-Agent': 'Antigravity-Session-Manager-VSCode-Extension' } }, (res) => {
+                if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+                    return this.downloadWithRedirects(res.headers.location, dest, maxRedirects - 1)
+                        .then(resolve)
+                        .catch(reject);
                 }
                 if (res.statusCode !== 200) {
-                    return reject(new Error(`Tải file thất bại (HTTP ${res.statusCode})`));
+                    return reject(new Error(`Server trả về mã lỗi HTTP ${res.statusCode}`));
                 }
-                const fileStream = fs.createWriteStream(destPath);
+                const fileStream = fs.createWriteStream(dest);
                 res.pipe(fileStream);
                 fileStream.on('finish', () => {
                     fileStream.close();
                     resolve();
                 });
                 fileStream.on('error', (err) => {
-                    fs.unlink(destPath, () => { });
+                    fs.unlink(dest, () => { });
                     reject(err);
                 });
-            }).on('error', reject);
+            }).on('error', (err) => {
+                reject(err);
+            });
         });
     }
     static compareSemver(v1, v2) {
         const p1 = v1.split('.').map(n => parseInt(n, 10) || 0);
         const p2 = v2.split('.').map(n => parseInt(n, 10) || 0);
-        const len = Math.max(p1.length, p2.length);
-        for (let i = 0; i < len; i++) {
+        for (let i = 0; i < Math.max(p1.length, p2.length); i++) {
             const num1 = p1[i] || 0;
             const num2 = p2[i] || 0;
             if (num1 > num2)

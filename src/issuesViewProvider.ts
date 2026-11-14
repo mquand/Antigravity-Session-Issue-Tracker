@@ -6,9 +6,9 @@ import { SessionScanner } from './scanner';
 import { ExtensionUpdater } from './updater';
 
 export class IssuesViewProvider implements vscode.WebviewViewProvider {
-  public static readonly viewType = 'claudeSessionManager.issuesView';
-  public static readonly explorerViewType = 'claudeSessionManager.sessionExplorer';
-  public static readonly scmViewType = 'claudeSessionManager.sessionScm';
+  public static readonly viewType = 'antigravitySessionManager.issuesView';
+  public static readonly explorerViewType = 'antigravitySessionManager.sessionExplorer';
+  public static readonly scmViewType = 'antigravitySessionManager.sessionScm';
   private _views: Set<vscode.WebviewView> = new Set();
   private _watchers: vscode.FileSystemWatcher[] = [];
   private _refreshTimer?: NodeJS.Timeout;
@@ -23,13 +23,13 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
     private readonly _context?: vscode.ExtensionContext
   ) {
     this._statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    this._statusBarItem.command = 'claudeSessionManager.statusMenu';
-    this._statusBarItem.text = '$(sparkle) Claude: Idle';
-    this._statusBarItem.tooltip = 'Claude Session & Issue Manager';
+    this._statusBarItem.command = 'antigravitySessionManager.statusMenu';
+    this._statusBarItem.text = '$(sparkle) Antigravity: Idle';
+    this._statusBarItem.tooltip = 'Antigravity Session & Issue Manager';
     this._statusBarItem.show();
 
     vscode.workspace.onDidChangeConfiguration(e => {
-      if (e.affectsConfiguration('claudeSessionManager')) {
+      if (e.affectsConfiguration('antigravitySessionManager')) {
         this.refresh();
       }
     });
@@ -45,7 +45,7 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
   }
 
   private getLanguage(): 'vi' | 'en' {
-    const config = vscode.workspace.getConfiguration('claudeSessionManager');
+    const config = vscode.workspace.getConfiguration('antigravitySessionManager');
     const setting = config.get<string>('language') || 'auto';
     if (setting === 'vi' || setting === 'en') {
       return setting;
@@ -70,8 +70,8 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
   ) {
     this._views.add(webviewView);
 
-    // Luôn đảm bảo tên hiển thị thống nhất là "Claude Sessions", không bị tiền tố "Explorer: "
-    webviewView.title = 'Claude Sessions';
+    // Luôn đảm bảo tên hiển thị thống nhất là "Antigravity Sessions", không bị tiền tố "Explorer: "
+    webviewView.title = 'Antigravity Sessions';
 
     webviewView.onDidDispose(() => {
       this._views.delete(webviewView);
@@ -165,7 +165,7 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
               action: 'settings'
             },
             {
-              label: lang === 'en' ? '$(folder-opened) Select Claude Storage Directory...' : '$(folder-opened) Chọn thư mục lưu trữ Claude (~/.claude/projects)...',
+              label: lang === 'en' ? '$(folder-opened) Select Antigravity Storage Directory...' : '$(folder-opened) Chọn thư mục lưu trữ Antigravity (~/.gemini/antigravity)...',
               description: lang === 'en' ? 'Browse folder instead of pasting path' : 'Chọn thư mục trực quan từ máy',
               action: 'browseStorage'
             },
@@ -187,11 +187,11 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
 
           if (!pick) break;
           if (pick.action === 'settings') {
-            await vscode.commands.executeCommand('workbench.action.openSettings', 'claudeSessionManager');
+            await vscode.commands.executeCommand('workbench.action.openSettings', 'antigravitySessionManager');
           } else if (pick.action === 'browseStorage') {
-            await vscode.commands.executeCommand('claudeSessionManager.browseStoragePath');
+            await vscode.commands.executeCommand('antigravitySessionManager.browseStoragePath');
           } else if (pick.action === 'browseWorkspace') {
-            await vscode.commands.executeCommand('claudeSessionManager.browseWorkspaceRoot');
+            await vscode.commands.executeCommand('antigravitySessionManager.browseWorkspaceRoot');
           } else if (pick.action === 'update') {
             if (this._context) await ExtensionUpdater.checkForUpdates(this._context, true);
           }
@@ -203,23 +203,42 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
           }
           break;
         }
-        case 'openSession': {
+        case 'newSession': {
           try {
-            await vscode.commands.executeCommand('claude-vscode.primaryEditor.open', data.id);
+            await vscode.commands.executeCommand('antigravity.startNewConversation');
           } catch {
             try {
-              await vscode.commands.executeCommand('claude-vscode.editor.open', data.id);
+              await vscode.commands.executeCommand('antigravity.panel.focus');
+            } catch {}
+          }
+          break;
+        }
+        case 'openSession': {
+          try {
+            await vscode.commands.executeCommand('antigravity.openConversation', data.id);
+          } catch {
+            try {
+              await vscode.env.openExternal(vscode.Uri.parse(`vscode://google.google-antigravity/open-conversation?cascadeId=${data.id}`));
             } catch {
-              await vscode.commands.executeCommand('claude-vscode.editor.openLast');
+              try {
+                await vscode.commands.executeCommand('antigravity.panel.focus');
+              } catch {
+                const term = vscode.window.createTerminal('Antigravity');
+                term.show();
+                term.sendText(`agy --conversation ${data.id}`);
+              }
             }
           }
           break;
         }
         case 'approve': {
           try {
-            await vscode.commands.executeCommand('claude-vscode.primaryEditor.open', data.id);
+            await vscode.commands.executeCommand('antigravity.openConversation', data.id);
+            await vscode.commands.executeCommand('antigravity.acceptAllChanges');
           } catch {
-            await vscode.commands.executeCommand('claude-vscode.editor.openLast');
+            try {
+              await vscode.commands.executeCommand('antigravity.panel.focus');
+            } catch {}
           }
           break;
         }
@@ -370,12 +389,12 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
     this._watchers.forEach(w => w.dispose());
     this._watchers = [];
 
-    const config = vscode.workspace.getConfiguration('claudeSessionManager');
+    const config = vscode.workspace.getConfiguration('antigravitySessionManager');
     const customPath = config.get<string>('storagePath');
     const dirs = SessionScanner.getWatchedDirectories(customPath);
 
     for (const dir of dirs) {
-      const pattern = new vscode.RelativePattern(dir, '**/*.jsonl');
+      const pattern = new vscode.RelativePattern(dir, '**/*');
       const watcher = vscode.workspace.createFileSystemWatcher(pattern);
 
       const triggerDebouncedRefresh = () => {
@@ -602,7 +621,7 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
   }
 
   public async refresh() {
-    const config = vscode.workspace.getConfiguration('claudeSessionManager');
+    const config = vscode.workspace.getConfiguration('antigravitySessionManager');
     const customPath = config.get<string>('storagePath');
     const workspaceRoot = config.get<string>('workspaceRoot');
     const defaultRepo = config.get<string>('defaultRepo');
@@ -690,7 +709,7 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
     md.supportThemeIcons = true;
 
     if (lang === 'en') {
-      md.appendMarkdown(`### $(sparkle) **Claude Session & Issue Tracker**\n\n`);
+      md.appendMarkdown(`### $(sparkle) **Antigravity Session & Issue Tracker**\n\n`);
       if (needAcceptCount > 0) {
         md.appendMarkdown(`$(bell-dot) **${needAcceptCount} tasks waiting approval**\n\n`);
       } else if (runningCount > 0) {
@@ -704,12 +723,12 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
       }
       md.appendMarkdown(`---\n\n`);
       md.appendMarkdown(`**Quick switch tab:**\n\n`);
-      md.appendMarkdown(`* [$(calendar) **Today** (${todayCount})](command:claudeSessionManager.openTab?%22today%22)\n`);
-      md.appendMarkdown(`* [$(list-unordered) **All Sessions** (${groupedSessions.length})](command:claudeSessionManager.openTab?%22all%22)\n\n`);
+      md.appendMarkdown(`* [$(calendar) **Today** (${todayCount})](command:antigravitySessionManager.openTab?%22today%22)\n`);
+      md.appendMarkdown(`* [$(list-unordered) **All Sessions** (${groupedSessions.length})](command:antigravitySessionManager.openTab?%22all%22)\n\n`);
       md.appendMarkdown(`---\n\n`);
-      md.appendMarkdown(`[$(gear) Settings](command:claudeSessionManager.openSettings) &nbsp;|&nbsp; [$(refresh) Refresh](command:claudeSessionManager.refresh)`);
+      md.appendMarkdown(`[$(gear) Settings](command:antigravitySessionManager.openSettings) &nbsp;|&nbsp; [$(refresh) Refresh](command:antigravitySessionManager.refresh)`);
     } else {
-      md.appendMarkdown(`### $(sparkle) **Claude Session & Issue Tracker**\n\n`);
+      md.appendMarkdown(`### $(sparkle) **Antigravity Session & Issue Tracker**\n\n`);
       if (needAcceptCount > 0) {
         md.appendMarkdown(`$(bell-dot) **${needAcceptCount} task đang chờ bạn phê duyệt**\n\n`);
       } else if (runningCount > 0) {
@@ -723,28 +742,28 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
       }
       md.appendMarkdown(`---\n\n`);
       md.appendMarkdown(`**Chuyển nhanh đến tab:**\n\n`);
-      md.appendMarkdown(`* [$(calendar) **Hôm nay** (${todayCount})](command:claudeSessionManager.openTab?%22today%22)\n`);
-      md.appendMarkdown(`* [$(list-unordered) **Tất cả các ngày** (${groupedSessions.length})](command:claudeSessionManager.openTab?%22all%22)\n\n`);
+      md.appendMarkdown(`* [$(calendar) **Hôm nay** (${todayCount})](command:antigravitySessionManager.openTab?%22today%22)\n`);
+      md.appendMarkdown(`* [$(list-unordered) **Tất cả các ngày** (${groupedSessions.length})](command:antigravitySessionManager.openTab?%22all%22)\n\n`);
       md.appendMarkdown(`---\n\n`);
-      md.appendMarkdown(`[$(gear) Cài đặt](command:claudeSessionManager.openSettings) &nbsp;|&nbsp; [$(refresh) Làm mới](command:claudeSessionManager.refresh)`);
+      md.appendMarkdown(`[$(gear) Cài đặt](command:antigravitySessionManager.openSettings) &nbsp;|&nbsp; [$(refresh) Làm mới](command:antigravitySessionManager.refresh)`);
     }
 
     this._statusBarItem.tooltip = md;
 
     if (needAcceptCount > 0) {
-      this._statusBarItem.text = `$(bell-dot) Claude: ${needAcceptCount} ${lang === 'en' ? 'Waiting' : 'Chờ duyệt'}`;
+      this._statusBarItem.text = `$(bell-dot) Antigravity: ${needAcceptCount} ${lang === 'en' ? 'Waiting' : 'Chờ duyệt'}`;
       this._statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
     } else if (runningCount > 0) {
-      this._statusBarItem.text = `$(sync~spin) Claude: ${runningCount} ${lang === 'en' ? 'Running' : 'Đang chạy'}`;
+      this._statusBarItem.text = `$(sync~spin) Antigravity: ${runningCount} ${lang === 'en' ? 'Running' : 'Đang chạy'}`;
       this._statusBarItem.backgroundColor = undefined;
     } else if (failedCount > 0) {
-      this._statusBarItem.text = `$(error) Claude: ${failedCount} ${lang === 'en' ? 'Limited' : 'Bị limit'}`;
+      this._statusBarItem.text = `$(error) Antigravity: ${failedCount} ${lang === 'en' ? 'Limited' : 'Bị limit'}`;
       this._statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
     } else if (needReviewCount > 0) {
-      this._statusBarItem.text = `$(eye) Claude: ${needReviewCount} ${lang === 'en' ? 'Review' : 'Cần review'}`;
+      this._statusBarItem.text = `$(eye) Antigravity: ${needReviewCount} ${lang === 'en' ? 'Review' : 'Cần review'}`;
       this._statusBarItem.backgroundColor = undefined;
     } else {
-      this._statusBarItem.text = '$(sparkle) Claude: Idle';
+      this._statusBarItem.text = '$(sparkle) Antigravity: Idle';
       this._statusBarItem.backgroundColor = undefined;
     }
   }
@@ -755,7 +774,7 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Claude Issue Manager</title>
+  <title>Antigravity Issue Manager</title>
   <style>
     :root {
       --bg-color: var(--vscode-sideBar-background, #0f1115);
@@ -1901,7 +1920,7 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
         <span id="wsWorktreeClear" class="ws-worktree-clear" style="display: none;" title="Bỏ lọc worktree">✕</span>
       </button>
     </div>
-    <div class="ws-tokens-badge" id="wsTokensBadge" title="Tổng số token Claude đã dùng hôm nay">
+    <div class="ws-tokens-badge" id="wsTokensBadge" title="Tổng số token Antigravity đã dùng hôm nay">
       <span class="ws-tokens-label">tokens:</span>
       <span class="ws-tokens-num" id="wsTokensNum">0</span>
     </div>
@@ -2254,7 +2273,7 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
               '<div class="sub-session-bottom-row">' +
                 '<span class="sub-session-time">' + escapeHtml(sub.statusMessage) + '</span>' +
                 '<span style="opacity: 0.35;">•</span>' +
-                '<span class="sub-session-meta">' + escapeHtml(sub.modelName || 'Claude') + '</span>' +
+                '<span class="sub-session-meta">' + escapeHtml(sub.modelName || 'Gemini 3.8') + '</span>' +
                 tokenStr +
                 costStr +
               '</div>' +
@@ -2589,8 +2608,8 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
                 '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="18" cy="6" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>' +
               '</div>' +
               '<div style="font-weight: 600; color: var(--text-main); margin-bottom: 4px;">' + (currentLang === 'en' ? 'Worktree: ' : 'Git Worktree: ') + escapeHtml(currentWorktree) + '</div>' +
-              '<div>' + (currentLang === 'en' ? 'No Claude sessions recorded for this worktree yet.' : 'Chưa có phiên làm việc Claude nào trong worktree này.') + '</div>' +
-              '<div style="margin-top: 8px; font-size: 11px; opacity: 0.8;">' + (currentLang === 'en' ? 'Run <code>claude</code> in this folder to start a new task.' : 'Mở terminal tại thư mục worktree này và gõ <code>claude</code> để bắt đầu task mới!') + '</div>' +
+              '<div>' + (currentLang === 'en' ? 'No Antigravity sessions recorded for this worktree yet.' : 'Chưa có phiên làm việc Antigravity nào trong worktree này.') + '</div>' +
+              '<div style="margin-top: 8px; font-size: 11px; opacity: 0.8;">' + (currentLang === 'en' ? 'Run <code>agy</code> in this folder to start a new task.' : 'Mở terminal tại thư mục worktree này và gõ <code>agy</code> để bắt đầu task mới!') + '</div>' +
               '</div>';
           } else if (currentFilter === 'today') {
             html = '<div style="text-align: center; color: #64748b; padding: 24px;">' + t('noSessionsToday') + '</div>';

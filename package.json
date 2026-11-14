@@ -1,18 +1,18 @@
 {
-  "name": "claude-session-deck",
-  "displayName": "Claude Session & Issue Tracker",
-  "description": "Track and manage Claude Code sessions, issues, token metrics, and git worktrees directly in VS Code / Theo dõi và quản lý phiên làm việc Claude trực tiếp trên VS Code",
-  "version": "0.2.28",
+  "name": "antigravity-session-deck",
+  "displayName": "Antigravity Session & Issue Tracker",
+  "description": "Track and manage Antigravity sessions, issues, token metrics, and git worktrees directly in VS Code / Theo dõi và quản lý phiên làm việc Antigravity trực tiếp trên VS Code",
+  "version": "0.3.0",
   "publisher": "mhquan",
   "author": "mhquan",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mquand/Claude-Session-Manager-.git"
+    "url": "https://github.com/mquand/Antigravity-Session-Issue-Tracker.git"
   },
   "icon": "resources/icon.png",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.80.0"
   },
   "categories": [
     "Other",
@@ -26,93 +26,117 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "claude-session-manager-sidebar",
-          "title": "Claude Sessions",
+          "id": "antigravity-session-manager-sidebar",
+          "title": "Antigravity Sessions",
           "icon": "resources/icon.svg"
         }
       ]
     },
     "views": {
-      "claude-session-manager-sidebar": [
+      "antigravity-session-manager-sidebar": [
         {
           "type": "webview",
-          "id": "claudeSessionManager.issuesView",
-          "name": "Claude Sessions"
+          "id": "antigravitySessionManager.issuesView",
+          "name": "Antigravity Sessions"
         }
       ],
       "explorer": [
         {
           "type": "webview",
-          "id": "claudeSessionManager.sessionExplorer",
-          "name": "Claude Sessions",
-          "when": "config.claudeSessionManager.showInExplorer"
+          "id": "antigravitySessionManager.sessionExplorer",
+          "name": "Antigravity Sessions",
+          "when": "config.antigravitySessionManager.showInExplorer"
         }
       ],
       "scm": [
         {
           "type": "webview",
-          "id": "claudeSessionManager.sessionScm",
-          "name": "Claude Sessions",
-          "when": "config.claudeSessionManager.showInSourceControl"
+          "id": "antigravitySessionManager.sessionScm",
+          "name": "Antigravity Sessions",
+          "when": "config.antigravitySessionManager.showInSourceControl"
         }
       ]
     },
     "commands": [
       {
-        "command": "claudeSessionManager.refresh",
-        "title": "Refresh Claude Sessions / Làm mới danh sách Sessions",
+        "command": "antigravitySessionManager.refresh",
+        "title": "Refresh Antigravity Sessions / Làm mới danh sách Sessions",
         "icon": "$(refresh)"
       },
       {
-        "command": "claudeSessionManager.openSettings",
+        "command": "antigravitySessionManager.newSession",
+        "title": "New Antigravity Conversation / Bắt đầu cuộc trò chuyện mới",
+        "icon": "$(add)"
+      },
+      {
+        "command": "antigravitySessionManager.openSettings",
         "title": "Configure Storage Path & Settings / Cấu hình đường dẫn lưu trữ"
       },
       {
-        "command": "claudeSessionManager.browseStoragePath",
-        "title": "Select Claude Storage Folder (Browse...) / Chọn thư mục lưu trữ Claude Sessions",
+        "command": "antigravitySessionManager.browseStoragePath",
+        "title": "Select Antigravity Storage Folder (Browse...) / Chọn thư mục lưu trữ Antigravity Sessions",
         "icon": "$(folder-opened)"
       },
       {
-        "command": "claudeSessionManager.browseWorkspaceRoot",
+        "command": "antigravitySessionManager.browseWorkspaceRoot",
         "title": "Select Workspace Root Folder (Browse...) / Chọn thư mục gốc Workspace",
         "icon": "$(root-folder)"
       },
       {
-        "command": "claudeSessionManager.checkForUpdates",
+        "command": "antigravitySessionManager.checkForUpdates",
         "title": "Check for Updates (GitHub Releases) / Kiểm tra bản cập nhật mới",
         "icon": "$(cloud-download)"
       },
       {
-        "command": "claudeSessionManager.toggleExplorerView",
-        "title": "Toggle Claude Sessions in Explorer / Bật-Tắt hiển thị trong thanh Explorer"
+        "command": "antigravitySessionManager.toggleExplorerView",
+        "title": "Toggle Antigravity Sessions in Explorer / Bật-Tắt hiển thị trong thanh Explorer"
       },
       {
-        "command": "claudeSessionManager.toggleSourceControlView",
-        "title": "Toggle Claude Sessions in Source Control / Bật-Tắt hiển thị trong Source Control"
+        "command": "antigravitySessionManager.toggleSourceControlView",
+        "title": "Toggle Antigravity Sessions in Source Control / Bật-Tắt hiển thị trong Source Control"
       },
       {
-        "command": "claudeSessionManager.statusMenu",
-        "title": "Claude Sessions Status Menu / Menu trạng thái Claude Sessions"
+        "command": "antigravitySessionManager.statusMenu",
+        "title": "Antigravity Sessions Status Menu / Menu trạng thái Antigravity Sessions"
       },
       {
-        "command": "claudeSessionManager.openTab",
-        "title": "Open Claude Sessions Tab / Mở tab lọc Claude Sessions"
+        "command": "antigravitySessionManager.openTab",
+        "title": "Open Antigravity Sessions Tab / Mở tab lọc Antigravity Sessions"
       }
     ],
-    "configuration": {
-      "title": "Claude Session Manager",
-      "properties": {
-        "claudeSessionManager.storagePath": {
-          "type": "string",
-          "default": "~/.claude/projects",
-          "description": "Path to Claude conversation transcripts and sessions storage directory (~/.claude/projects). Use command 'Select Claude Storage Folder' to browse. / Đường dẫn chứa lịch sử session của Claude."
+    "menus": {
+      "view/title": [
+        {
+          "command": "antigravitySessionManager.newSession",
+          "when": "view == antigravitySessionManager.issuesView || view == antigravitySessionManager.sessionExplorer || view == antigravitySessionManager.sessionScm",
+          "group": "navigation@1"
         },
-        "claudeSessionManager.autoRefreshInterval": {
+        {
+          "command": "antigravitySessionManager.refresh",
+          "when": "view == antigravitySessionManager.issuesView || view == antigravitySessionManager.sessionExplorer || view == antigravitySessionManager.sessionScm",
+          "group": "navigation@2"
+        },
+        {
+          "command": "antigravitySessionManager.checkForUpdates",
+          "when": "view == antigravitySessionManager.issuesView",
+          "group": "navigation@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Antigravity Session Manager",
+      "properties": {
+        "antigravitySessionManager.storagePath": {
+          "type": "string",
+          "default": "~/.gemini/antigravity",
+          "description": "Path to Antigravity sessions directory (~/.gemini/antigravity). / Đường dẫn chứa lịch sử session của Antigravity."
+        },
+        "antigravitySessionManager.autoRefreshInterval": {
           "type": "number",
           "default": 10,
           "description": "Auto-refresh scan interval in seconds (default: 10s) / Thời gian tự động quét lại (giây)"
         },
-        "claudeSessionManager.language": {
+        "antigravitySessionManager.language": {
           "type": "string",
           "enum": [
             "auto",
@@ -122,22 +146,22 @@
           "default": "auto",
           "description": "Interface display language: auto / vi / en / Ngôn ngữ hiển thị giao diện"
         },
-        "claudeSessionManager.showInExplorer": {
+        "antigravitySessionManager.showInExplorer": {
           "type": "boolean",
           "default": true,
-          "description": "Show Claude Sessions in the Explorer view (File Tree) / Hiển thị Claude Sessions trong thanh Explorer (File Tree)"
+          "description": "Show Antigravity Sessions in the Explorer view (File Tree) / Hiển thị Antigravity Sessions trong thanh Explorer (File Tree)"
         },
-        "claudeSessionManager.showInSourceControl": {
+        "antigravitySessionManager.showInSourceControl": {
           "type": "boolean",
           "default": true,
-          "description": "Show Claude Sessions in the Source Control view (Git) / Hiển thị Claude Sessions trong thanh Source Control (Git)"
+          "description": "Show Antigravity Sessions in the Source Control view (Git) / Hiển thị Antigravity Sessions trong thanh Source Control (Git)"
         },
-        "claudeSessionManager.workspaceRoot": {
+        "antigravitySessionManager.workspaceRoot": {
           "type": "string",
           "default": "",
           "description": "Root folder path containing your projects or repositories. Leave empty to auto-detect. / Đường dẫn thư mục chứa các dự án/repository. Để trống để tự động nhận diện."
         },
-        "claudeSessionManager.defaultRepo": {
+        "antigravitySessionManager.defaultRepo": {
           "type": "string",
           "default": "",
           "description": "Default repository name when a session cannot determine its project / Tên repository mặc định khi không xác định được dự án cụ thể."
@@ -152,7 +176,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
-    "@types/vscode": "^1.85.0",
+    "@types/vscode": "^1.80.0",
     "typescript": "^5.3.3"
   }
 }
