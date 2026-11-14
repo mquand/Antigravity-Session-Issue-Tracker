@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run Claude Extension",
+      "name": "Run Antigravity Extension",
       "type": "extensionDevelopmentHost",
       "request": "launch",
       "args": [

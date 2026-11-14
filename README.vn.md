@@ -3,6 +3,7 @@
 **Tiếng Việt** | [English](README.md)
 
 [![Visual Studio Code](https://img.shields.io/badge/VS%20Code-Extension-blue.svg)](https://marketplace.visualstudio.com)
+[![GitHub Release](https://img.shields.io/github/v/release/mquand/Antigravity-Session-Issue-Tracker?color=brightgreen)](https://github.com/mquand/Antigravity-Session-Issue-Tracker/releases)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Linux%20%7C%20Windows-brightgreen.svg)]()
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -16,10 +17,10 @@
 
 ## 💡 Vấn đề giải quyết
 
-Khi sử dụng Antigravity IDE (hoặc các AI agent tự động) cường độ cao:
+Khi sử dụng Google Antigravity (hoặc Antigravity IDE) ở cường độ cao:
 - Bạn thường mở nhiều task cùng lúc nhưng không biết task nào **đang chạy**, task nào **đã xong**, task nào **đang dừng chờ duyệt lệnh hoặc câu hỏi (`need accept`/`question`)**.
-- Lịch sử hội thoại nhiều task, khó tìm lại đúng ngữ cảnh cũ.
-- Khi cần duyệt lệnh terminal hoặc muốn quay lại cuộc trò chuyện cũ, phải tìm ID thủ công.
+- Lịch sử chat có nhiều task cùng lúc, khó tìm lại đúng ngữ cảnh cũ.
+- Khi cần duyệt code hoặc muốn quay lại cuộc trò chuyện cũ, phải tìm ID thủ công.
 
 **Antigravity Session Manager** quét trực tiếp SQLite Database trung tâm (`conversation_summaries.db`) và nhật ký chi tiết (`transcript.jsonl`) tại `~/.gemini/antigravity/` để tạo thành một bảng Dashboard trực quan 1-chạm ngay trên thanh công cụ của VS Code / Antigravity IDE.
 
@@ -28,13 +29,14 @@ Khi sử dụng Antigravity IDE (hoặc các AI agent tự động) cường đ�
 ## ✨ Tính năng nổi bật
 
 ### 1. Giám sát trạng thái chính xác theo Runtime Antigravity
-- 🔵 **ĐANG CHẠY (`Running`)**: Nhận diện theo trạng thái `CASCADE_RUN_STATUS_RUNNING` hoặc `not_fully_idle = 1` và process lock `presence/<id>.lock`. Khi Antigravity đang thực sự suy nghĩ, sinh mã hoặc chạy tool thì hiển thị Đang chạy. Khi Antigravity đã hoàn thành turn và chuyển sang trạng thái nghỉ (`idle`), extension sẽ tự động cập nhật sang **Đã hoàn thành**.
+- 🔵 **ĐANG CHẠY (`Running`)**: Nhận diện theo trạng thái `CASCADE_RUN_STATUS_RUNNING` hoặc `not_fully_idle = 1` và process lock `presence/<id>.lock`. Khi Antigravity đang thực sự suy nghĩ, sinh mã hoặc chạy tool thì hiển thị Đang chạy. Khi Antigravity đã hoàn tất turn và chuyển sang trạng thái nghỉ (`idle`), extension sẽ tự động cập nhật sang **Đã hoàn thành**.
 - 🟡 **CHỜ DUYỆT / CÂU HỎI (`Need Accept` / `Question`)**: Phát hiện ngay khoảnh khắc Antigravity dừng lại hỏi thêm thông tin (`ask_question`) hoặc chờ phê duyệt thay đổi code.
 - 🟢 **ĐÃ HOÀN THÀNH (`Done`)**: Các phiên làm việc đã hoàn tất turn, hiển thị thời gian tương đối (`vừa xong`, `5 phút trước`...).
+- 🔴 **LỖI / THẤT BẠI (`Failed`)**: Nhận diện các session bị lỗi hoặc tiến trình bị huỷ.
 
 ### 2. Tương thích 100% Antigravity & Gemini CLI
 Extension hoạt động bằng cách đọc trực tiếp dữ liệu SQLite và nhật ký local tại `~/.gemini/antigravity/`:
-- **Tốc độ cực nhanh**: Đọc dữ liệu từ SQLite DB tập trung kết hợp bộ nhớ cache mtimeMs thông minh.
+- **Tốc độ cực nhanh**: Đọc dữ liệu từ SQLite DB tập trung kết hợp bộ nhớ cache `mtimeMs` thông minh.
 - Bất kể bạn chạy qua Antigravity IDE, VS Code Extension hay Antigravity CLI (`agy`), extension đều nhận diện trơn tru.
 
 ### 3. Tự động tương thích 2 chế độ làm việc
@@ -71,11 +73,69 @@ Giao diện card được thiết kế hiện đại, dễ đọc cho người q
 - Các nhóm **ĐANG CHẠY**, **CHỜ DUYỆT**, **ĐÃ HOÀN THÀNH** có thể click vào tiêu đề để thu gọn hoặc mở rộng tùy ý.
 - Tự động quét và phát hiện các Git worktree liên quan trong workspace. Menu dropdown lọc nhanh theo từng Worktree (`⑂ worktree: <tên nhánh>`).
 
+### 10. Tự động kiểm tra & Cập nhật từ GitHub Releases
+- Tích hợp sẵn cơ chế kiểm tra phiên bản mới từ GitHub Releases.
+- Khi có bản mới, VS Code sẽ hiển thị thông báo để bạn cập nhật chỉ với 1 cú click chuột.
+
+---
+
+## ⚙️ Cấu hình Extension (Settings)
+
+Bạn có thể tuỳ chỉnh trong `Settings` (`Cmd + ,` trên macOS hoặc `Ctrl + ,` trên Windows/Linux) ➔ tìm `Antigravity Session Manager`:
+
+| Cấu hình | Mặc định | Ý nghĩa |
+| :--- | :--- | :--- |
+| `antigravitySessionManager.storagePath` | `~/.gemini/antigravity` | Đường dẫn thư mục lưu trữ dữ liệu của Antigravity |
+| `antigravitySessionManager.autoRefreshInterval` | `10` | Chu kỳ tự động quét lại (giây) |
+| `antigravitySessionManager.language` | `auto` | Ngôn ngữ hiển thị (`auto` / `vi` / `en`) |
+| `antigravitySessionManager.showInExplorer` | `true` | Hiển thị bảng Sessions trong thanh Explorer |
+| `antigravitySessionManager.showInSourceControl`| `true` | Hiển thị bảng Sessions trong thanh Git Source Control |
+| `antigravitySessionManager.workspaceRoot` | `""` | Đường dẫn thư mục gốc chứa các dự án (để trống để tự nhận diện) |
+| `antigravitySessionManager.defaultRepo` | `""` | Tên repository mặc định khi session không xác định được repo |
+
 ---
 
 ## 🛠️ Cài đặt
 
-### Cách cài đặt từ file `.vsix`
-1. Build hoặc tải file `.vsix` mới nhất.
+### Cách 1: Cài đặt từ file đóng gói `.vsix` (Khuyên dùng)
+1. Tải file `.vsix` mới nhất từ [GitHub Releases](https://github.com/mquand/Antigravity-Session-Issue-Tracker/releases).
 2. Mở VS Code / Antigravity IDE, nhấn `Cmd + Shift + P` (macOS) hoặc `Ctrl + Shift + P` (Windows/Linux).
-3. Gõ `Extensions: Install from VSIX...` và chọn file `.vsix`.
+3. Gõ `Extensions: Install from VSIX...` và chọn file `.vsix` vừa tải.
+4. Tải lại cửa sổ (`Developer: Reload Window`) để áp dụng.
+
+### Cách 2: Cài đặt qua dòng lệnh (CLI)
+```bash
+code --install-extension antigravity-session-deck-0.3.0.vsix
+```
+
+---
+
+## 💻 Hướng dẫn phát triển (Development)
+
+Nếu bạn muốn tự chỉnh sửa hoặc đóng góp tính năng mới:
+
+```bash
+# 1. Clone repository
+git clone https://github.com/mquand/Antigravity-Session-Issue-Tracker.git
+cd Antigravity-Session-Issue-Tracker
+
+# 2. Cài đặt các dependencies
+npm install
+
+# 3. Biên dịch TypeScript
+npm run compile
+
+# 4. Chạy chế độ watch tự động biên dịch khi sửa code
+npm run watch
+
+# 5. Đóng gói file .vsix
+npx @vscode/vsce package
+```
+
+Nhấn phím `F5` trong VS Code để mở cửa sổ Extension Development Host và test trực tiếp extension!
+
+---
+
+## 📄 Bản quyền (License)
+
+Dự án được phát hành theo giấy phép [MIT License](LICENSE).

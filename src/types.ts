@@ -31,9 +31,6 @@ export interface AntigravitySession {
   isNeedReview?: boolean;
 }
 
-// Backward-compatible alias
-export type ClaudeSession = AntigravitySession;
-
 export interface ScanOptions {
   workspaceFolders?: string[];
   defaultRepo?: string;

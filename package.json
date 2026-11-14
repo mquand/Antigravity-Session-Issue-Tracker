@@ -18,6 +18,16 @@
     "Other",
     "SCM Providers"
   ],
+  "keywords": [
+    "antigravity",
+    "google-antigravity",
+    "gemini",
+    "sessions",
+    "session-manager",
+    "issue-tracker",
+    "ai-agent",
+    "agy"
+  ],
   "activationEvents": [
     "onStartupFinished"
   ],

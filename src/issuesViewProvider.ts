@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ClaudeSession } from './types';
+import { AntigravitySession } from './types';
 import { SessionScanner } from './scanner';
 import { ExtensionUpdater } from './updater';
 
@@ -14,8 +14,8 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
   private _refreshTimer?: NodeJS.Timeout;
   private _debounceTimer?: NodeJS.Timeout;
   private _statusBarItem: vscode.StatusBarItem;
-  private _lastSessions: ClaudeSession[] = [];
-  private _lastGroupedSessions: ClaudeSession[] = [];
+  private _lastSessions: AntigravitySession[] = [];
+  private _lastGroupedSessions: AntigravitySession[] = [];
   private _currentWorktreeFilter: string = '';
 
   constructor(
@@ -463,7 +463,7 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
     await this._context.globalState.update('reviewedSessionIds_v2', reviewed);
   }
 
-  public static groupSessionsByTaskStream(sessions: ClaudeSession[]): ClaudeSession[] {
+  public static groupSessionsByTaskStream(sessions: AntigravitySession[]): AntigravitySession[] {
     if (!sessions || sessions.length <= 1) {
       return sessions ? [...sessions] : [];
     }
@@ -475,14 +475,14 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
     const MAX_CONTINUATION_GAP = 12 * 60 * 60 * 1000; // Tối đa 12 tiếng giữa 2 phiên liên tiếp của cùng một chuỗi task
 
     // Helper chuẩn hoá issueId
-    const getNormIssue = (s: ClaudeSession): string | undefined => {
+    const getNormIssue = (s: AntigravitySession): string | undefined => {
       if (!s.issueId) return undefined;
       const clean = s.issueId.trim().toLowerCase();
       return clean.startsWith('#') ? clean : `#${clean}`;
     };
 
     // Helper chuẩn hoá tên conversation để so sánh gom nhóm theo tiêu đề
-    const getNormTitle = (s: ClaudeSession): string | undefined => {
+    const getNormTitle = (s: AntigravitySession): string | undefined => {
       if (!s.title) return undefined;
       if (s.title.toLowerCase().startsWith('session ') && s.title.length <= 18) return undefined;
       const clean = s.title.toLowerCase().replace(/[^a-z0-9\u00C0-\u024F\u1EA0-\u1EF9]/gi, ' ').replace(/\s+/g, ' ').trim();
@@ -583,7 +583,7 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
     }
 
     // Group sessions by their root
-    const rootGroups = new Map<number, ClaudeSession[]>();
+    const rootGroups = new Map<number, AntigravitySession[]>();
     for (let i = 0; i < sorted.length; i++) {
       if (sessionTags[i].length === 0) {
         // Unidentified session: keep independent
@@ -597,7 +597,7 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
-    const result: ClaudeSession[] = [];
+    const result: AntigravitySession[] = [];
     for (const [, list] of rootGroups) {
       if (list.length === 1) {
         result.push(list[0]);
