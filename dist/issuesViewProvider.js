@@ -20,6 +20,8 @@ class IssuesViewProvider {
     _lastSessions = [];
     _lastGroupedSessions = [];
     _currentWorktreeFilter = '';
+    _isRefreshing = false;
+    _pendingRefresh = false;
     constructor(_extensionUri, _context) {
         this._extensionUri = _extensionUri;
         this._context = _context;
@@ -135,12 +137,11 @@ class IssuesViewProvider {
                             await this.addReviewedId(sub.id);
                         }
                     }
-                    await this.refresh();
+                    // Không gọi full refresh() ở đây để tránh nghẽn luồng Extension Host
                     break;
                 }
                 case 'unmarkReviewed': {
                     await this.removeReviewedId(data.id);
-                    await this.refresh();
                     break;
                 }
                 case 'openSettings': {
@@ -195,48 +196,67 @@ class IssuesViewProvider {
                 }
                 case 'newSession': {
                     try {
+                        await vscode.commands.executeCommand('workbench.view.extension.antigravity-sidebar');
+                    }
+                    catch { }
+                    try {
+                        await vscode.commands.executeCommand('antigravity.panel.focus');
+                    }
+                    catch { }
+                    try {
                         await vscode.commands.executeCommand('antigravity.startNewConversation');
                     }
-                    catch {
-                        try {
-                            await vscode.commands.executeCommand('antigravity.panel.focus');
-                        }
-                        catch { }
-                    }
+                    catch { }
                     break;
                 }
                 case 'openSession': {
+                    const sessionId = data.id;
+                    if (!sessionId)
+                        break;
+                    // Đánh dấu reviewed ngầm không chặn luồng giao diện
+                    this.addReviewedId(sessionId).catch(() => { });
+                    // 1. Chuyển đổi activity bar sang Antigravity Chat ngay lập tức
                     try {
-                        await vscode.commands.executeCommand('antigravity.openConversation', data.id);
+                        await vscode.commands.executeCommand('workbench.view.extension.antigravity-sidebar');
+                    }
+                    catch { }
+                    try {
+                        await vscode.commands.executeCommand('antigravity.panel.focus');
+                    }
+                    catch { }
+                    // 2. Mở chính xác cuộc hội thoại tương ứng
+                    try {
+                        await vscode.commands.executeCommand('antigravity.openConversation', sessionId);
                     }
                     catch {
                         try {
-                            await vscode.env.openExternal(vscode.Uri.parse(`vscode://google.google-antigravity/open-conversation?cascadeId=${data.id}`));
+                            await vscode.env.openExternal(vscode.Uri.parse(`vscode://google.google-antigravity/open-conversation?cascadeId=${sessionId}`));
                         }
                         catch {
                             try {
-                                await vscode.commands.executeCommand('antigravity.panel.focus');
-                            }
-                            catch {
                                 const term = vscode.window.createTerminal('Antigravity');
                                 term.show();
-                                term.sendText(`agy --conversation ${data.id}`);
+                                term.sendText(`agy --conversation ${sessionId}`);
                             }
+                            catch { }
                         }
                     }
                     break;
                 }
                 case 'approve': {
                     try {
+                        await vscode.commands.executeCommand('workbench.view.extension.antigravity-sidebar');
+                    }
+                    catch { }
+                    try {
+                        await vscode.commands.executeCommand('antigravity.panel.focus');
+                    }
+                    catch { }
+                    try {
                         await vscode.commands.executeCommand('antigravity.openConversation', data.id);
                         await vscode.commands.executeCommand('antigravity.acceptAllChanges');
                     }
-                    catch {
-                        try {
-                            await vscode.commands.executeCommand('antigravity.panel.focus');
-                        }
-                        catch { }
-                    }
+                    catch { }
                     break;
                 }
                 case 'deleteSession': {
@@ -264,7 +284,7 @@ class IssuesViewProvider {
         const worktreeMap = new Map();
         // 1. Quét các Git Worktree thực tế từ workspace (kể cả khi chưa chạy session nào)
         const wsFolders = vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath) || [];
-        const discovered = scanner_1.SessionScanner.discoverWorkspaceWorktrees(wsFolders);
+        const discovered = scanner_1.SessionScanner.discoverWorkspaceWorktrees(wsFolders, true);
         for (const wt of discovered) {
             if (wt.branch) {
                 worktreeMap.set(wt.branch, {
@@ -369,22 +389,52 @@ class IssuesViewProvider {
         this._watchers = [];
         const config = vscode.workspace.getConfiguration('antigravitySessionManager');
         const customPath = config.get('storagePath');
-        const dirs = scanner_1.SessionScanner.getWatchedDirectories(customPath);
-        for (const dir of dirs) {
-            const pattern = new vscode.RelativePattern(dir, '**/*');
-            const watcher = vscode.workspace.createFileSystemWatcher(pattern);
-            const triggerDebouncedRefresh = () => {
-                if (this._debounceTimer) {
-                    clearTimeout(this._debounceTimer);
+        const baseDir = customPath ? scanner_1.SessionScanner.resolveHomePath(customPath) : scanner_1.SessionScanner.getDefaultStoragePath();
+        const triggerDebouncedRefresh = () => {
+            if (this._debounceTimer) {
+                clearTimeout(this._debounceTimer);
+            }
+            this._debounceTimer = setTimeout(() => {
+                this.refresh();
+            }, 800);
+        };
+        if (fs.existsSync(baseDir)) {
+            // 1. Chỉ theo dõi database conversation_summaries.db* (sqlite db và wal)
+            try {
+                const dbPattern = new vscode.RelativePattern(baseDir, 'conversation_summaries.db*');
+                const dbWatcher = vscode.workspace.createFileSystemWatcher(dbPattern);
+                dbWatcher.onDidChange(triggerDebouncedRefresh);
+                dbWatcher.onDidCreate(triggerDebouncedRefresh);
+                dbWatcher.onDidDelete(triggerDebouncedRefresh);
+                this._watchers.push(dbWatcher);
+            }
+            catch { }
+            // 2. Chỉ theo dõi các file lock trong presence/ (khi có phiên chạy mới hoặc kết thúc)
+            const presenceDir = path.join(baseDir, 'presence');
+            if (fs.existsSync(presenceDir)) {
+                try {
+                    const lockPattern = new vscode.RelativePattern(presenceDir, '*.lock');
+                    const lockWatcher = vscode.workspace.createFileSystemWatcher(lockPattern);
+                    lockWatcher.onDidChange(triggerDebouncedRefresh);
+                    lockWatcher.onDidCreate(triggerDebouncedRefresh);
+                    lockWatcher.onDidDelete(triggerDebouncedRefresh);
+                    this._watchers.push(lockWatcher);
                 }
-                this._debounceTimer = setTimeout(() => {
-                    this.refresh();
-                }, 300);
-            };
-            watcher.onDidChange(triggerDebouncedRefresh);
-            watcher.onDidCreate(triggerDebouncedRefresh);
-            watcher.onDidDelete(triggerDebouncedRefresh);
-            this._watchers.push(watcher);
+                catch { }
+            }
+            // 3. Chỉ theo dõi file transcript.jsonl trong brain/ (khi câu trả lời hoặc token cập nhật)
+            const brainDir = path.join(baseDir, 'brain');
+            if (fs.existsSync(brainDir)) {
+                try {
+                    const transcriptPattern = new vscode.RelativePattern(brainDir, '*/.system_generated/logs/transcript.jsonl');
+                    const transcriptWatcher = vscode.workspace.createFileSystemWatcher(transcriptPattern);
+                    transcriptWatcher.onDidChange(triggerDebouncedRefresh);
+                    transcriptWatcher.onDidCreate(triggerDebouncedRefresh);
+                    transcriptWatcher.onDidDelete(triggerDebouncedRefresh);
+                    this._watchers.push(transcriptWatcher);
+                }
+                catch { }
+            }
         }
         if (this._context?.globalStorageUri) {
             try {
@@ -392,14 +442,6 @@ class IssuesViewProvider {
                 if (fs.existsSync(globalStorageDir)) {
                     const pattern = new vscode.RelativePattern(globalStorageDir, 'state.vscdb*');
                     const dbWatcher = vscode.workspace.createFileSystemWatcher(pattern);
-                    const triggerDebouncedRefresh = () => {
-                        if (this._debounceTimer) {
-                            clearTimeout(this._debounceTimer);
-                        }
-                        this._debounceTimer = setTimeout(() => {
-                            this.refresh();
-                        }, 300);
-                    };
                     dbWatcher.onDidChange(triggerDebouncedRefresh);
                     dbWatcher.onDidCreate(triggerDebouncedRefresh);
                     dbWatcher.onDidDelete(triggerDebouncedRefresh);
@@ -588,150 +630,164 @@ class IssuesViewProvider {
         return result;
     }
     async refresh() {
-        const config = vscode.workspace.getConfiguration('antigravitySessionManager');
-        const customPath = config.get('storagePath');
-        const workspaceRoot = config.get('workspaceRoot');
-        const defaultRepo = config.get('defaultRepo');
-        const wsFolders = vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath) || [];
-        if (workspaceRoot) {
-            const resolved = scanner_1.SessionScanner.resolveHomePath(workspaceRoot);
-            if (fs.existsSync(resolved) && !wsFolders.includes(resolved)) {
-                wsFolders.push(resolved);
-            }
+        if (this._isRefreshing) {
+            this._pendingRefresh = true;
+            return;
         }
-        let dbPathHint = undefined;
-        if (this._context?.globalStorageUri) {
-            dbPathHint = path.join(path.dirname(this._context.globalStorageUri.fsPath), 'state.vscdb');
-        }
-        const sessions = await scanner_1.SessionScanner.scanSessions(customPath, {
-            workspaceFolders: wsFolders,
-            defaultRepo: defaultRepo || undefined,
-            dbPathHint
-        });
-        this._lastSessions = sessions;
-        const groupedSessions = IssuesViewProvider.groupSessionsByTaskStream(sessions);
-        this._lastGroupedSessions = groupedSessions;
-        if (this._currentWorktreeFilter) {
-            const hasBranchInSessions = sessions.some(s => s.branch === this._currentWorktreeFilter && (!s.cwd || fs.existsSync(s.cwd)));
-            const discovered = scanner_1.SessionScanner.discoverWorkspaceWorktrees(wsFolders);
-            const hasBranchInWorktrees = discovered.some(w => w.branch === this._currentWorktreeFilter);
-            if (!hasBranchInSessions && !hasBranchInWorktrees) {
-                this._currentWorktreeFilter = '';
+        this._isRefreshing = true;
+        try {
+            const config = vscode.workspace.getConfiguration('antigravitySessionManager');
+            const customPath = config.get('storagePath');
+            const workspaceRoot = config.get('workspaceRoot');
+            const defaultRepo = config.get('defaultRepo');
+            const wsFolders = vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath) || [];
+            if (workspaceRoot) {
+                const resolved = scanner_1.SessionScanner.resolveHomePath(workspaceRoot);
+                if (fs.existsSync(resolved) && !wsFolders.includes(resolved)) {
+                    wsFolders.push(resolved);
+                }
             }
-        }
-        const startOfToday = new Date();
-        startOfToday.setHours(0, 0, 0, 0);
-        const needAcceptCount = groupedSessions.filter(s => s.status === 'need_accept').length;
-        const runningCount = groupedSessions.filter(s => s.status === 'running').length;
-        const failedCount = groupedSessions.filter(s => s.status === 'failed' && s.updatedAt >= startOfToday.getTime()).length;
-        const needReviewCount = groupedSessions.filter(s => s.status === 'done' && !this.getReviewedIds().includes(s.id) && s.updatedAt >= startOfToday.getTime()).length;
-        const lang = this.getLanguage();
-        const currentWorkspace = this.getCurrentWorkspace();
-        for (const view of this._views) {
-            if (needAcceptCount > 0) {
-                view.badge = {
-                    value: needAcceptCount,
-                    tooltip: lang === 'en' ? `${needAcceptCount} tasks waiting approval` : `${needAcceptCount} task đang chờ duyệt`
-                };
+            let dbPathHint = undefined;
+            if (this._context?.globalStorageUri) {
+                dbPathHint = path.join(path.dirname(this._context.globalStorageUri.fsPath), 'state.vscdb');
             }
-            else if (failedCount > 0) {
-                view.badge = {
-                    value: failedCount,
-                    tooltip: lang === 'en' ? `${failedCount} tasks limited or failed` : `${failedCount} task bị limit hoặc lỗi`
-                };
-            }
-            else if (needReviewCount > 0) {
-                view.badge = {
-                    value: needReviewCount,
-                    tooltip: lang === 'en' ? `${needReviewCount} tasks need review` : `${needReviewCount} task cần review`
-                };
-            }
-            else {
-                view.badge = undefined;
-            }
-            view.webview.postMessage({
-                type: 'updateSessions',
-                sessions: groupedSessions,
-                reviewedIds: this.getReviewedIds(),
-                currentWorkspace,
-                lang,
-                worktreeFilter: this._currentWorktreeFilter,
-                hasWorktrees: this.checkHasWorktrees()
+            const sessions = await scanner_1.SessionScanner.scanSessions(customPath, {
+                workspaceFolders: wsFolders,
+                defaultRepo: defaultRepo || undefined,
+                dbPathHint
             });
-        }
-        const todayCount = groupedSessions.filter(s => s.updatedAt >= startOfToday.getTime()).length;
-        const activeTotalCount = needAcceptCount + runningCount + failedCount + needReviewCount;
-        const md = new vscode.MarkdownString('', true);
-        md.isTrusted = true;
-        md.supportThemeIcons = true;
-        if (lang === 'en') {
-            md.appendMarkdown(`### $(sparkle) **Antigravity Session & Issue Tracker**\n\n`);
-            if (needAcceptCount > 0) {
-                md.appendMarkdown(`$(bell-dot) **${needAcceptCount} tasks waiting approval**\n\n`);
+            this._lastSessions = sessions;
+            const groupedSessions = IssuesViewProvider.groupSessionsByTaskStream(sessions);
+            this._lastGroupedSessions = groupedSessions;
+            if (this._currentWorktreeFilter) {
+                const hasBranchInSessions = sessions.some(s => s.branch === this._currentWorktreeFilter && (!s.cwd || fs.existsSync(s.cwd)));
+                const discovered = scanner_1.SessionScanner.discoverWorkspaceWorktrees(wsFolders);
+                const hasBranchInWorktrees = discovered.some(w => w.branch === this._currentWorktreeFilter);
+                if (!hasBranchInSessions && !hasBranchInWorktrees) {
+                    this._currentWorktreeFilter = '';
+                }
             }
-            else if (runningCount > 0) {
-                md.appendMarkdown(`$(sync~spin) **${runningCount} tasks running**\n\n`);
+            const startOfToday = new Date();
+            startOfToday.setHours(0, 0, 0, 0);
+            const needAcceptCount = groupedSessions.filter(s => s.status === 'need_accept').length;
+            const runningCount = groupedSessions.filter(s => s.status === 'running').length;
+            const failedCount = groupedSessions.filter(s => s.status === 'failed' && s.updatedAt >= startOfToday.getTime()).length;
+            const needReviewCount = groupedSessions.filter(s => s.status === 'done' && !this.getReviewedIds().includes(s.id) && s.updatedAt >= startOfToday.getTime()).length;
+            const lang = this.getLanguage();
+            const currentWorkspace = this.getCurrentWorkspace();
+            for (const view of this._views) {
+                if (needAcceptCount > 0) {
+                    view.badge = {
+                        value: needAcceptCount,
+                        tooltip: lang === 'en' ? `${needAcceptCount} tasks waiting approval` : `${needAcceptCount} task đang chờ duyệt`
+                    };
+                }
+                else if (failedCount > 0) {
+                    view.badge = {
+                        value: failedCount,
+                        tooltip: lang === 'en' ? `${failedCount} tasks limited or failed` : `${failedCount} task bị limit hoặc lỗi`
+                    };
+                }
+                else if (needReviewCount > 0) {
+                    view.badge = {
+                        value: needReviewCount,
+                        tooltip: lang === 'en' ? `${needReviewCount} tasks need review` : `${needReviewCount} task cần review`
+                    };
+                }
+                else {
+                    view.badge = undefined;
+                }
+                view.webview.postMessage({
+                    type: 'updateSessions',
+                    sessions: groupedSessions,
+                    reviewedIds: this.getReviewedIds(),
+                    currentWorkspace,
+                    lang,
+                    worktreeFilter: this._currentWorktreeFilter,
+                    hasWorktrees: this.checkHasWorktrees()
+                });
             }
-            else if (failedCount > 0) {
-                md.appendMarkdown(`$(error) **${failedCount} tasks limited or failed**\n\n`);
-            }
-            else if (needReviewCount > 0) {
-                md.appendMarkdown(`$(eye) **${needReviewCount} tasks need review**\n\n`);
+            const todayCount = groupedSessions.filter(s => s.updatedAt >= startOfToday.getTime()).length;
+            const activeTotalCount = needAcceptCount + runningCount + failedCount + needReviewCount;
+            const md = new vscode.MarkdownString('', true);
+            md.isTrusted = true;
+            md.supportThemeIcons = true;
+            if (lang === 'en') {
+                md.appendMarkdown(`### $(sparkle) **Antigravity Session & Issue Tracker**\n\n`);
+                if (needAcceptCount > 0) {
+                    md.appendMarkdown(`$(bell-dot) **${needAcceptCount} tasks waiting approval**\n\n`);
+                }
+                else if (runningCount > 0) {
+                    md.appendMarkdown(`$(sync~spin) **${runningCount} tasks running**\n\n`);
+                }
+                else if (failedCount > 0) {
+                    md.appendMarkdown(`$(error) **${failedCount} tasks limited or failed**\n\n`);
+                }
+                else if (needReviewCount > 0) {
+                    md.appendMarkdown(`$(eye) **${needReviewCount} tasks need review**\n\n`);
+                }
+                else {
+                    md.appendMarkdown(`$(check) **Idle (Ready)**\n\n`);
+                }
+                md.appendMarkdown(`---\n\n`);
+                md.appendMarkdown(`**Quick switch tab:**\n\n`);
+                md.appendMarkdown(`* [$(calendar) **Today** (${todayCount})](command:antigravitySessionManager.openTab?%22today%22)\n`);
+                md.appendMarkdown(`* [$(list-unordered) **All Sessions** (${groupedSessions.length})](command:antigravitySessionManager.openTab?%22all%22)\n\n`);
+                md.appendMarkdown(`---\n\n`);
+                md.appendMarkdown(`[$(gear) Settings](command:antigravitySessionManager.openSettings) &nbsp;|&nbsp; [$(refresh) Refresh](command:antigravitySessionManager.refresh)`);
             }
             else {
-                md.appendMarkdown(`$(check) **Idle (Ready)**\n\n`);
+                md.appendMarkdown(`### $(sparkle) **Antigravity Session & Issue Tracker**\n\n`);
+                if (needAcceptCount > 0) {
+                    md.appendMarkdown(`$(bell-dot) **${needAcceptCount} task đang chờ bạn phê duyệt**\n\n`);
+                }
+                else if (runningCount > 0) {
+                    md.appendMarkdown(`$(sync~spin) **${runningCount} task đang thực thi**\n\n`);
+                }
+                else if (failedCount > 0) {
+                    md.appendMarkdown(`$(error) **${failedCount} task bị limit hoặc lỗi**\n\n`);
+                }
+                else if (needReviewCount > 0) {
+                    md.appendMarkdown(`$(eye) **${needReviewCount} task cần review**\n\n`);
+                }
+                else {
+                    md.appendMarkdown(`$(check) **Sẵn sàng (Idle)**\n\n`);
+                }
+                md.appendMarkdown(`---\n\n`);
+                md.appendMarkdown(`**Chuyển nhanh đến tab:**\n\n`);
+                md.appendMarkdown(`* [$(calendar) **Hôm nay** (${todayCount})](command:antigravitySessionManager.openTab?%22today%22)\n`);
+                md.appendMarkdown(`* [$(list-unordered) **Tất cả các ngày** (${groupedSessions.length})](command:antigravitySessionManager.openTab?%22all%22)\n\n`);
+                md.appendMarkdown(`---\n\n`);
+                md.appendMarkdown(`[$(gear) Cài đặt](command:antigravitySessionManager.openSettings) &nbsp;|&nbsp; [$(refresh) Làm mới](command:antigravitySessionManager.refresh)`);
             }
-            md.appendMarkdown(`---\n\n`);
-            md.appendMarkdown(`**Quick switch tab:**\n\n`);
-            md.appendMarkdown(`* [$(calendar) **Today** (${todayCount})](command:antigravitySessionManager.openTab?%22today%22)\n`);
-            md.appendMarkdown(`* [$(list-unordered) **All Sessions** (${groupedSessions.length})](command:antigravitySessionManager.openTab?%22all%22)\n\n`);
-            md.appendMarkdown(`---\n\n`);
-            md.appendMarkdown(`[$(gear) Settings](command:antigravitySessionManager.openSettings) &nbsp;|&nbsp; [$(refresh) Refresh](command:antigravitySessionManager.refresh)`);
-        }
-        else {
-            md.appendMarkdown(`### $(sparkle) **Antigravity Session & Issue Tracker**\n\n`);
+            this._statusBarItem.tooltip = md;
             if (needAcceptCount > 0) {
-                md.appendMarkdown(`$(bell-dot) **${needAcceptCount} task đang chờ bạn phê duyệt**\n\n`);
+                this._statusBarItem.text = `$(bell-dot) Antigravity: ${needAcceptCount} ${lang === 'en' ? 'Waiting' : 'Chờ duyệt'}`;
+                this._statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
             }
             else if (runningCount > 0) {
-                md.appendMarkdown(`$(sync~spin) **${runningCount} task đang thực thi**\n\n`);
+                this._statusBarItem.text = `$(sync~spin) Antigravity: ${runningCount} ${lang === 'en' ? 'Running' : 'Đang chạy'}`;
+                this._statusBarItem.backgroundColor = undefined;
             }
             else if (failedCount > 0) {
-                md.appendMarkdown(`$(error) **${failedCount} task bị limit hoặc lỗi**\n\n`);
+                this._statusBarItem.text = `$(error) Antigravity: ${failedCount} ${lang === 'en' ? 'Limited' : 'Bị limit'}`;
+                this._statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
             }
             else if (needReviewCount > 0) {
-                md.appendMarkdown(`$(eye) **${needReviewCount} task cần review**\n\n`);
+                this._statusBarItem.text = `$(eye) Antigravity: ${needReviewCount} ${lang === 'en' ? 'Review' : 'Cần review'}`;
+                this._statusBarItem.backgroundColor = undefined;
             }
             else {
-                md.appendMarkdown(`$(check) **Sẵn sàng (Idle)**\n\n`);
+                this._statusBarItem.text = '$(sparkle) Antigravity: Idle';
+                this._statusBarItem.backgroundColor = undefined;
             }
-            md.appendMarkdown(`---\n\n`);
-            md.appendMarkdown(`**Chuyển nhanh đến tab:**\n\n`);
-            md.appendMarkdown(`* [$(calendar) **Hôm nay** (${todayCount})](command:antigravitySessionManager.openTab?%22today%22)\n`);
-            md.appendMarkdown(`* [$(list-unordered) **Tất cả các ngày** (${groupedSessions.length})](command:antigravitySessionManager.openTab?%22all%22)\n\n`);
-            md.appendMarkdown(`---\n\n`);
-            md.appendMarkdown(`[$(gear) Cài đặt](command:antigravitySessionManager.openSettings) &nbsp;|&nbsp; [$(refresh) Làm mới](command:antigravitySessionManager.refresh)`);
         }
-        this._statusBarItem.tooltip = md;
-        if (needAcceptCount > 0) {
-            this._statusBarItem.text = `$(bell-dot) Antigravity: ${needAcceptCount} ${lang === 'en' ? 'Waiting' : 'Chờ duyệt'}`;
-            this._statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
-        }
-        else if (runningCount > 0) {
-            this._statusBarItem.text = `$(sync~spin) Antigravity: ${runningCount} ${lang === 'en' ? 'Running' : 'Đang chạy'}`;
-            this._statusBarItem.backgroundColor = undefined;
-        }
-        else if (failedCount > 0) {
-            this._statusBarItem.text = `$(error) Antigravity: ${failedCount} ${lang === 'en' ? 'Limited' : 'Bị limit'}`;
-            this._statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
-        }
-        else if (needReviewCount > 0) {
-            this._statusBarItem.text = `$(eye) Antigravity: ${needReviewCount} ${lang === 'en' ? 'Review' : 'Cần review'}`;
-            this._statusBarItem.backgroundColor = undefined;
-        }
-        else {
-            this._statusBarItem.text = '$(sparkle) Antigravity: Idle';
-            this._statusBarItem.backgroundColor = undefined;
+        finally {
+            this._isRefreshing = false;
+            if (this._pendingRefresh) {
+                this._pendingRefresh = false;
+                setTimeout(() => this.refresh(), 300);
+            }
         }
     }
     _getHtmlForWebview(_webview) {
@@ -1201,6 +1257,13 @@ class IssuesViewProvider {
     .session-card:hover {
       border-color: var(--card-hover-border);
       background: var(--card-hover-bg);
+    }
+
+    .session-card:active,
+    .session-card.card-opening {
+      transform: scale(0.985);
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
     }
 
     .status-dot {
@@ -2063,28 +2126,41 @@ class IssuesViewProvider {
       return n.toString();
     }
 
-    function openSession(id) {
-      if (id) {
-        let s = allSessions.find(item => item.id === id);
-        if (!s) {
-          for (const p of allSessions) {
-            if (Array.isArray(p.subSessions)) {
-              const found = p.subSessions.find(item => item.id === id);
-              if (found) { s = found; break; }
-            }
+    function openSession(id, targetEl) {
+      if (!id) return;
+
+      // 1. Gửi lệnh mở session sang Extension Host ngay lập tức!
+      vscode.postMessage({ type: 'openSession', id });
+
+      // 2. Hiệu ứng thị giác phản hồi tức thì
+      if (targetEl) {
+        targetEl.classList.add('card-opening');
+        setTimeout(() => {
+          try { targetEl.classList.remove('card-opening'); } catch (e) {}
+        }, 1200);
+      }
+
+      // 3. Cập nhật trạng thái reviewed cục bộ (nếu là session đã hoàn thành)
+      let s = allSessions.find(item => item.id === id);
+      if (!s) {
+        for (const p of allSessions) {
+          if (Array.isArray(p.subSessions)) {
+            const found = p.subSessions.find(item => item.id === id);
+            if (found) { s = found; break; }
           }
-        }
-        if (!reviewedIds.has(id) && (!s || s.status === 'done')) {
-          reviewedIds.add(id);
-          if (s && Array.isArray(s.subSessions)) {
-            s.subSessions.forEach(sub => reviewedIds.add(sub.id));
-          }
-          saveState();
-          vscode.postMessage({ type: 'markReviewed', id });
-          renderSessions();
         }
       }
-      vscode.postMessage({ type: 'openSession', id });
+      if (!reviewedIds.has(id) && (!s || s.status === 'done')) {
+        reviewedIds.add(id);
+        if (s && Array.isArray(s.subSessions)) {
+          s.subSessions.forEach(sub => reviewedIds.add(sub.id));
+        }
+        saveState();
+        vscode.postMessage({ type: 'markReviewed', id });
+        requestAnimationFrame(() => {
+          renderSessions();
+        });
+      }
     }
 
     function approveSession(id) {
@@ -2694,7 +2770,7 @@ class IssuesViewProvider {
         if (action === 'diff') {
           e.stopPropagation();
           if (id) {
-            openSession(id);
+            openSession(id, actionEl);
           }
           return;
         }
@@ -2735,7 +2811,7 @@ class IssuesViewProvider {
         if (action === 'open') {
           e.stopPropagation();
           if (id) {
-            openSession(id);
+            openSession(id, actionEl);
           }
           return;
         }

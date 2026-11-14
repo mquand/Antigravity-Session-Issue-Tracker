@@ -61,7 +61,7 @@ class SessionScanner {
         const dbPath = path.join(baseDir, 'conversation_summaries.db');
         if (fs.existsSync(dbPath)) {
             try {
-                const stdout = child_process.execSync(`sqlite3 -json "${dbPath}" "SELECT conversation_id, status, not_fully_idle FROM conversation_summaries WHERE not_fully_idle = 1 OR status = 'CASCADE_RUN_STATUS_RUNNING';"`, { timeout: 2000, encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+                const stdout = child_process.execSync(`sqlite3 -json "${dbPath}" "SELECT conversation_id, status, not_fully_idle FROM conversation_summaries WHERE not_fully_idle = 1 OR status = 'CASCADE_RUN_STATUS_RUNNING';"`, { timeout: 1500, encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
                 if (stdout && stdout.trim()) {
                     const rows = JSON.parse(stdout.trim());
                     if (Array.isArray(rows)) {
@@ -75,19 +75,21 @@ class SessionScanner {
             }
             catch { }
         }
-        // Kiểm tra thêm các lock file trong presence
+        // Kiểm tra nhanh presence: CHỈ xem các file lock được sửa đổi trong 30 giây gần nhất!
+        // KHÔNG BAO GIỜ chạy lsof lặp qua hàng chục file lock cũ vì sẽ gây treo cứng Extension Host!
         const presenceDir = path.join(baseDir, 'presence');
         if (fs.existsSync(presenceDir)) {
             try {
+                const now = Date.now();
                 const files = fs.readdirSync(presenceDir);
                 for (const f of files) {
                     if (f.endsWith('.lock')) {
                         const sid = f.replace('.lock', '');
                         if (!activeMap.has(sid)) {
                             try {
-                                // Kiểm tra xem có process nào đang giữ lock không
-                                const lsof = child_process.execSync(`lsof "${path.join(presenceDir, f)}"`, { timeout: 1000, encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
-                                if (lsof && lsof.includes('agy')) {
+                                const stat = fs.statSync(path.join(presenceDir, f));
+                                // Nếu file lock vừa được touch trong 30s thì mới là session đang chạy
+                                if (now - stat.mtimeMs < 30_000) {
                                     activeMap.set(sid, { status: 'running', pid: 0 });
                                 }
                             }
@@ -507,12 +509,19 @@ class SessionScanner {
             }
             catch { }
         }
+        this._worktreesCache = null;
         return prunedCount;
     }
-    static discoverWorkspaceWorktrees(workspaceFolders) {
+    static _worktreesCache = null;
+    static discoverWorkspaceWorktrees(workspaceFolders, force = false) {
         const results = [];
-        if (!workspaceFolders)
+        if (!workspaceFolders || workspaceFolders.length === 0)
             return results;
+        const key = workspaceFolders.join(';');
+        const now = Date.now();
+        if (!force && this._worktreesCache && this._worktreesCache.key === key && (now - this._worktreesCache.timestamp < 15_000)) {
+            return this._worktreesCache.data;
+        }
         const seenPaths = new Set();
         for (const wf of workspaceFolders) {
             if (!fs.existsSync(wf))
@@ -559,6 +568,7 @@ class SessionScanner {
             }
             catch { }
         }
+        this._worktreesCache = { timestamp: now, key, data: results };
         return results;
     }
     static formatTokens(count) {

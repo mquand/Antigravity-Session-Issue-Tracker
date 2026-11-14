@@ -49,12 +49,14 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('antigravitySessionManager.newSession', async () => {
       try {
+        await vscode.commands.executeCommand('workbench.view.extension.antigravity-sidebar');
+      } catch {}
+      try {
+        await vscode.commands.executeCommand('antigravity.panel.focus');
+      } catch {}
+      try {
         await vscode.commands.executeCommand('antigravity.startNewConversation');
-      } catch {
-        try {
-          await vscode.commands.executeCommand('antigravity.panel.focus');
-        } catch {}
-      }
+      } catch {}
     })
   );
 
