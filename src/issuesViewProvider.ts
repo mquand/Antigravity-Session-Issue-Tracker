@@ -505,8 +505,6 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
       return sessions ? [...sessions] : [];
     }
 
-    const defaultBranches = new Set(['main', 'master', 'head', 'dev', 'develop']);
-
     // Sắp xếp giảm dần theo thời gian cập nhật để phiên mới nhất luôn đứng trước
     const sorted = [...sessions].sort((a, b) => b.updatedAt - a.updatedAt);
     const MAX_CONTINUATION_GAP = 12 * 60 * 60 * 1000; // Tối đa 12 tiếng giữa 2 phiên liên tiếp của cùng một chuỗi task
@@ -518,44 +516,28 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
       return clean.startsWith('#') ? clean : `#${clean}`;
     };
 
+    // Các tiêu đề mặc định/không đặc trưng — KHÔNG được dùng để gộp nhóm
+    const GENERIC_TITLES = new Set([
+      'cuộc trò chuyện mới', 'cuoc tro chuyen moi',
+      'cuộc hội thoại mới', 'cuoc hoi thoai moi',
+      'new conversation', 'untitled', 'untitled conversation',
+      'conversation', 'chat', 'phiên mới', 'phien moi'
+    ]);
+
     // Helper chuẩn hoá tên conversation để so sánh gom nhóm theo tiêu đề
     const getNormTitle = (s: AntigravitySession): string | undefined => {
       if (!s.title) return undefined;
       if (s.title.toLowerCase().startsWith('session ') && s.title.length <= 18) return undefined;
       const clean = s.title.toLowerCase().replace(/[^a-z0-9\u00C0-\u024F\u1EA0-\u1EF9]/gi, ' ').replace(/\s+/g, ' ').trim();
-      return clean.length >= 4 ? clean : undefined;
+      if (clean.length < 6 || GENERIC_TITLES.has(clean)) return undefined;
+      return clean;
     };
 
-    // Build tags for each session: issue:<repo>:<normIssue>, title:<repo>:<normTitle>, or branch:<repo>:<branch>
-    const sessionTags: string[][] = sorted.map(s => {
-      const tags: string[] = [];
-      const repo = (s.repo || '').toLowerCase();
-      const normIssue = getNormIssue(s);
-      if (normIssue) {
-        tags.push(`issue:${repo}:${normIssue}`);
-      }
-      const normTitle = getNormTitle(s);
-      if (normTitle) {
-        tags.push(`title:${repo}:${normTitle}`);
-      }
-      if (s.branch) {
-        const b = s.branch.toLowerCase();
-        if (!defaultBranches.has(b)) {
-          // Neu session da co issueId cu the, va branch lai chua ma so issue khac
-          // thi khong gan tag branch do cho session nay de tranh nham lan cheo branch.
-          const branchIssueMatch = b.match(/(?:^|[^\d])(\d{3,6})(?:[^\d]|$)/);
-          const currentNormIssueNum = normIssue ? normIssue.replace(/\D/g, '') : null;
-          if (currentNormIssueNum && branchIssueMatch && branchIssueMatch[1] !== currentNormIssueNum) {
-            // Bo qua tag branch nay vi branch thuoc issue khac
-          } else {
-            tags.push(`branch:${repo}:${b}`);
-          }
-        }
-      }
-      return tags;
-    });
+    // ---- Giai đoạn 1: Gộp theo quan hệ THẬT từ database Antigravity ----
+    // parent_conversation_id / group_id do chính Antigravity ghi — đáng tin hơn heuristic.
+    const idToIdx = new Map<string, number>();
+    sorted.forEach((s, i) => { if (s.id && !idToIdx.has(s.id)) idToIdx.set(s.id, i); });
 
-    // Disjoint Set Union (DSU) by session index
     const parent: number[] = sorted.map((_, i) => i);
     // Lưu tập hợp các issueId thuộc mỗi nhóm (để ngăn chặn việc gộp nhầm 2 issue khác nhau)
     const groupIssues: Set<string>[] = sorted.map(s => {
@@ -600,38 +582,105 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
       }
     }
 
-    // Map tag -> danh sách index của các phiên trước đó
-    const tagToIndices = new Map<string, number[]>();
+    // 1a. Session có parent_conversation_id -> gộp với phiên cha (không giới hạn thời gian)
     for (let i = 0; i < sorted.length; i++) {
-      for (const tag of sessionTags[i]) {
-        if (tagToIndices.has(tag)) {
-          for (const prevIdx of tagToIndices.get(tag)!) {
-            // Chỉ gom nhóm phiên nối tiếp nếu khoảng cách thời gian <= 12 tiếng
-            if (sorted[prevIdx].updatedAt - sorted[i].updatedAt <= MAX_CONTINUATION_GAP) {
-              union(i, prevIdx);
-            }
-          }
+      const pid = sorted[i].parentId;
+      if (pid) {
+        const pIdx = idToIdx.get(pid);
+        if (pIdx !== undefined && pIdx !== i) {
+          union(i, pIdx);
         }
-        if (!tagToIndices.has(tag)) {
-          tagToIndices.set(tag, []);
-        }
-        tagToIndices.get(tag)!.push(i);
       }
     }
 
-    // Group sessions by their root
+    // 1b. Session cùng group_id (non-empty) -> gộp với nhau
+    const groupIdToIndices = new Map<string, number[]>();
+    for (let i = 0; i < sorted.length; i++) {
+      const gid = sorted[i].groupId;
+      if (gid && gid.trim()) {
+        const key = gid.trim();
+        if (!groupIdToIndices.has(key)) groupIdToIndices.set(key, []);
+        groupIdToIndices.get(key)!.push(i);
+      }
+    }
+    for (const indices of groupIdToIndices.values()) {
+      for (let k = 1; k < indices.length; k++) {
+        union(indices[0], indices[k]);
+      }
+    }
+
+    // ---- Giai đoạn 2: Heuristic (chỉ là fallback khi DB không có quan hệ) ----
+    // Tag mạnh: issue:<repo>:<normIssue> — đủ tin để gộp nếu trong 12h.
+    // Tag yếu: title / branch — CHỈ gộp khi khớp từ 2 tín hiệu trở lên.
+    const repo = (s: AntigravitySession) => (s.repo || '').toLowerCase();
+
+    const issueTagToIndices = new Map<string, number[]>();
+    const weakTagToIndices = new Map<string, number[]>();
+
+    for (let i = 0; i < sorted.length; i++) {
+      const s = sorted[i];
+      const r = repo(s);
+      const normIssue = getNormIssue(s);
+      if (normIssue) {
+        const tag = `issue:${r}:${normIssue}`;
+        if (!issueTagToIndices.has(tag)) issueTagToIndices.set(tag, []);
+        issueTagToIndices.get(tag)!.push(i);
+      }
+
+      const normTitle = getNormTitle(s);
+      if (normTitle) {
+        const tag = `title:${r}:${normTitle}`;
+        if (!weakTagToIndices.has(tag)) weakTagToIndices.set(tag, []);
+        weakTagToIndices.get(tag)!.push(i);
+      }
+      if (s.branch) {
+        const tag = `branch:${r}:${s.branch.toLowerCase()}`;
+        if (!weakTagToIndices.has(tag)) weakTagToIndices.set(tag, []);
+        weakTagToIndices.get(tag)!.push(i);
+      }
+    }
+
+    // 2a. Gộp theo issue tag (mạnh) với giới hạn 12h giữa các phiên liên tiếp
+    for (const indices of issueTagToIndices.values()) {
+      for (let k = 1; k < indices.length; k++) {
+        const i = indices[k];
+        const j = indices[k - 1];
+        if (sorted[j].updatedAt - sorted[i].updatedAt <= MAX_CONTINUATION_GAP) {
+          union(i, j);
+        }
+      }
+    }
+
+    // 2b. Đếm số weak tag chung giữa các cặp session; chỉ gộp khi >= 2 tín hiệu + trong 12h
+    const pairKey = (a: number, b: number) => (a < b ? `${a}:${b}` : `${b}:${a}`);
+    const weakPairCount = new Map<string, number>();
+    for (const indices of weakTagToIndices.values()) {
+      for (let a = 0; a < indices.length; a++) {
+        for (let b = a + 1; b < indices.length; b++) {
+          const key = pairKey(indices[a], indices[b]);
+          weakPairCount.set(key, (weakPairCount.get(key) || 0) + 1);
+        }
+      }
+    }
+    for (const [key, count] of weakPairCount) {
+      if (count < 2) continue;
+      const [aStr, bStr] = key.split(':');
+      const a = Number(aStr);
+      const b = Number(bStr);
+      // sorted giảm dần theo updatedAt -> a < b nghĩa là a mới hơn
+      if (sorted[a].updatedAt - sorted[b].updatedAt <= MAX_CONTINUATION_GAP) {
+        union(a, b);
+      }
+    }
+
+    // Group sessions by their root (session không dính tín hiệu nào sẽ tự thành nhóm 1 phần tử)
     const rootGroups = new Map<number, AntigravitySession[]>();
     for (let i = 0; i < sorted.length; i++) {
-      if (sessionTags[i].length === 0) {
-        // Unidentified session: keep independent
-        rootGroups.set(-1 - i, [sorted[i]]);
-      } else {
-        const root = find(i);
-        if (!rootGroups.has(root)) {
-          rootGroups.set(root, []);
-        }
-        rootGroups.get(root)!.push(sorted[i]);
+      const root = find(i);
+      if (!rootGroups.has(root)) {
+        rootGroups.set(root, []);
       }
+      rootGroups.get(root)!.push(sorted[i]);
     }
 
     const result: AntigravitySession[] = [];

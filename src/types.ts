@@ -24,6 +24,8 @@ export interface AntigravitySession {
   turnCount: number;         // Ví dụ: 1049, 185
   shortId: string;           // 8 ký tự đầu: "5ae34f8e"
   cwd?: string;
+  parentId?: string;         // parent_conversation_id từ DB (quan hệ cha-con do Antigravity ghi)
+  groupId?: string;          // group_id từ DB
   rawInputTokens?: number;
   rawOutputTokens?: number;
   totalTokens?: number;

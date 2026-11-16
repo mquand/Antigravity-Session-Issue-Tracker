@@ -1,8 +1,8 @@
 {
-  "name": "antigravity-session-deck",
+  "name": "antigravity-session-tracker",
   "displayName": "Antigravity Session & Issue Tracker",
   "description": "Track and manage Antigravity sessions, issues, token metrics, and git worktrees directly in VS Code / Theo dõi và quản lý phiên làm việc Antigravity trực tiếp trên VS Code",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "mhquan",
   "author": "mhquan",
   "license": "MIT",

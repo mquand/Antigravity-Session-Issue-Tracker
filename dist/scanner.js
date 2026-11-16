@@ -111,7 +111,7 @@ class SessionScanner {
         let summaryRows = [];
         if (fs.existsSync(dbPath)) {
             try {
-                const query = `SELECT conversation_id, title, preview, step_count, last_modified_time, workspace_uris, status, not_fully_idle, killed, last_user_input_time FROM conversation_summaries ORDER BY last_modified_time DESC LIMIT 100;`;
+                const query = `SELECT conversation_id, title, preview, step_count, last_modified_time, workspace_uris, status, not_fully_idle, killed, last_user_input_time, parent_conversation_id, group_id FROM conversation_summaries ORDER BY last_modified_time DESC LIMIT 100;`;
                 const stdout = child_process.execSync(`sqlite3 -json "${dbPath}" "${query}"`, { timeout: 3000, encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'], maxBuffer: 10 * 1024 * 1024 });
                 if (stdout && stdout.trim()) {
                     summaryRows = JSON.parse(stdout.trim());
@@ -157,9 +157,9 @@ class SessionScanner {
             if (!sessionId)
                 continue;
             let title = (row.title || row.preview || 'Cuộc trò chuyện mới').trim();
-            // Nhận diện Issue ID (#1234, Issue #1234, etc.)
+            // Nhận diện Issue ID (#1234, Issue #1234, etc.) — chỉ chấp nhận dấu # để tránh bắt nhầm số thường
             let issueId = undefined;
-            const issueMatch = title.match(/(?:#|issue\s*#?)(\d+)/i);
+            const issueMatch = title.match(/#(\d{1,7})\b/);
             if (issueMatch) {
                 issueId = `#${issueMatch[1]}`;
             }
@@ -298,6 +298,8 @@ class SessionScanner {
                 outputTokensFormatted,
                 turnCount,
                 cwd,
+                parentId: row.parent_conversation_id || undefined,
+                groupId: row.group_id || undefined,
                 rawInputTokens: inTokens,
                 rawOutputTokens: outTokens,
                 totalTokens
