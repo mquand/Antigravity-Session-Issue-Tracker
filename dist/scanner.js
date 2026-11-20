@@ -7,7 +7,7 @@ const os = require("os");
 const readline = require("readline");
 const child_process = require("child_process");
 class SessionScanner {
-    static CACHE_VERSION = 10;
+    static CACHE_VERSION = 11;
     static sessionCache = new Map();
     static resolveHomePath(p) {
         if (p.startsWith('~/') || p === '~') {
@@ -22,7 +22,62 @@ class SessionScanner {
         const baseDir = customPath ? this.resolveHomePath(customPath) : this.getDefaultStoragePath();
         const brainDir = path.join(baseDir, 'brain');
         const presenceDir = path.join(baseDir, 'presence');
-        return [baseDir, brainDir, presenceDir].filter(d => fs.existsSync(d));
+        const annotationsDir = path.join(baseDir, 'annotations');
+        return [baseDir, brainDir, presenceDir, annotationsDir].filter(d => fs.existsSync(d));
+    }
+    /**
+     * Đọc tiêu đề trực tiếp từ annotations/{sessionId}.pbtxt
+     * Antigravity lưu title chuẩn ở đây, đọc thuần Node.js không cần phụ thuộc binary bên ngoài.
+     */
+    static getTitleFromAnnotations(baseDir, sessionId) {
+        try {
+            const pbtxtPath = path.join(baseDir, 'annotations', `${sessionId}.pbtxt`);
+            if (fs.existsSync(pbtxtPath)) {
+                const content = fs.readFileSync(pbtxtPath, 'utf8');
+                const match = content.match(/title:\s*"([^"]+)"/);
+                if (match && match[1]) {
+                    const t = match[1].trim();
+                    if (t)
+                        return t;
+                }
+            }
+        }
+        catch { }
+        return undefined;
+    }
+    /**
+     * Truy vấn SQLite an toàn: thử dùng sqlite3 CLI trước, nếu máy không có sqlite3 CLI
+     * thì fallback qua python (sẵn có trên Windows/macOS/Linux)
+     */
+    static querySqlite(dbPath, sql, timeoutMs = 3000) {
+        if (!fs.existsSync(dbPath))
+            return null;
+        // Cách 1: Thử sqlite3 CLI
+        try {
+            const stdout = child_process.execSync(`sqlite3 -json "${dbPath}" "${sql}"`, { timeout: timeoutMs, encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'], maxBuffer: 10 * 1024 * 1024 });
+            if (stdout && stdout.trim()) {
+                return JSON.parse(stdout.trim());
+            }
+        }
+        catch { }
+        // Cách 2: Fallback sang python (nếu có sẵn python trên máy)
+        try {
+            const pyScript = 'import sys, sqlite3, json; con = sqlite3.connect(sys.argv[1]); con.row_factory = sqlite3.Row; cur = con.cursor(); print(json.dumps([dict(r) for r in cur.execute(sys.argv[2]).fetchall()]))';
+            const cmd = process.platform === 'win32'
+                ? `cmd.exe /c "python -c \\"${pyScript}\\" \\"${dbPath}\\" \\"${sql.replace(/"/g, '\\"')}\\""`
+                : `python3 -c '${pyScript}' "${dbPath}" "${sql}"`;
+            const stdout = child_process.execSync(cmd, {
+                timeout: timeoutMs,
+                encoding: 'utf8',
+                stdio: ['pipe', 'pipe', 'ignore'],
+                maxBuffer: 10 * 1024 * 1024
+            });
+            if (stdout && stdout.trim()) {
+                return JSON.parse(stdout.trim());
+            }
+        }
+        catch { }
+        return null;
     }
     static deleteSession(sessionId, _filePath) {
         const baseDir = this.getDefaultStoragePath();
@@ -31,7 +86,17 @@ class SessionScanner {
             if (fs.existsSync(dbPath)) {
                 try {
                     const sql = `DELETE FROM conversation_summaries WHERE conversation_id = '${sessionId}'; DELETE FROM conversation_parents WHERE conversation_id = '${sessionId}';`;
-                    child_process.execSync(`sqlite3 "${dbPath}" "${sql}"`, { timeout: 3000, stdio: ['ignore', 'ignore', 'ignore'] });
+                    // Thử sqlite3 CLI
+                    try {
+                        child_process.execSync(`sqlite3 "${dbPath}" "${sql}"`, { timeout: 3000, stdio: ['ignore', 'ignore', 'ignore'] });
+                    }
+                    catch {
+                        const pyScript = 'import sys, sqlite3; con = sqlite3.connect(sys.argv[1]); cur = con.cursor(); cur.executescript(sys.argv[2]); con.commit()';
+                        const cmd = process.platform === 'win32'
+                            ? `cmd.exe /c "python -c \\"${pyScript}\\" \\"${dbPath}\\" \\"${sql.replace(/"/g, '\\"')}\\""`
+                            : `python3 -c '${pyScript}' "${dbPath}" "${sql}"`;
+                        child_process.execSync(cmd, { timeout: 3000, stdio: ['ignore', 'ignore', 'ignore'] });
+                    }
                 }
                 catch { }
             }
@@ -47,6 +112,13 @@ class SessionScanner {
             if (fs.existsSync(lockFile)) {
                 fs.rmSync(lockFile, { force: true });
             }
+            const annotationFile = path.join(baseDir, 'annotations', `${sessionId}.pbtxt`);
+            if (fs.existsSync(annotationFile)) {
+                try {
+                    fs.rmSync(annotationFile, { force: true });
+                }
+                catch { }
+            }
             this.sessionCache.delete(sessionId);
             return true;
         }
@@ -61,14 +133,11 @@ class SessionScanner {
         const dbPath = path.join(baseDir, 'conversation_summaries.db');
         if (fs.existsSync(dbPath)) {
             try {
-                const stdout = child_process.execSync(`sqlite3 -json "${dbPath}" "SELECT conversation_id, status, not_fully_idle FROM conversation_summaries WHERE not_fully_idle = 1 OR status = 'CASCADE_RUN_STATUS_RUNNING';"`, { timeout: 1500, encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
-                if (stdout && stdout.trim()) {
-                    const rows = JSON.parse(stdout.trim());
-                    if (Array.isArray(rows)) {
-                        for (const r of rows) {
-                            if (r.conversation_id) {
-                                activeMap.set(r.conversation_id, { status: 'running', pid: 0 });
-                            }
+                const rows = this.querySqlite(dbPath, "SELECT conversation_id, status, not_fully_idle FROM conversation_summaries WHERE not_fully_idle = 1 OR status = 'CASCADE_RUN_STATUS_RUNNING';", 1500);
+                if (Array.isArray(rows)) {
+                    for (const r of rows) {
+                        if (r.conversation_id) {
+                            activeMap.set(r.conversation_id, { status: 'running', pid: 0 });
                         }
                     }
                 }
@@ -112,9 +181,9 @@ class SessionScanner {
         if (fs.existsSync(dbPath)) {
             try {
                 const query = `SELECT conversation_id, title, preview, step_count, last_modified_time, workspace_uris, status, not_fully_idle, killed, last_user_input_time, parent_conversation_id, group_id, hex(raw_summary) AS raw_summary_hex FROM conversation_summaries ORDER BY last_modified_time DESC LIMIT 100;`;
-                const stdout = child_process.execSync(`sqlite3 -json "${dbPath}" "${query}"`, { timeout: 3000, encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'], maxBuffer: 10 * 1024 * 1024 });
-                if (stdout && stdout.trim()) {
-                    summaryRows = JSON.parse(stdout.trim());
+                const rows = this.querySqlite(dbPath, query, 3000);
+                if (Array.isArray(rows) && rows.length > 0) {
+                    summaryRows = rows;
                 }
             }
             catch (err) {
@@ -132,10 +201,12 @@ class SessionScanner {
                             const transPath = path.join(brainDir, entry.name, '.system_generated', 'logs', 'transcript.jsonl');
                             if (fs.existsSync(transPath)) {
                                 const stat = fs.statSync(transPath);
+                                // Thử đọc title từ annotations/{sessionId}.pbtxt
+                                const annotTitle = this.getTitleFromAnnotations(baseDir, entry.name) || '';
                                 summaryRows.push({
                                     conversation_id: entry.name,
-                                    title: '',
-                                    preview: '',
+                                    title: annotTitle,
+                                    preview: annotTitle,
                                     step_count: 0,
                                     last_modified_time: new Date(stat.mtimeMs).toISOString(),
                                     workspace_uris: '',
@@ -156,7 +227,13 @@ class SessionScanner {
             const sessionId = row.conversation_id;
             if (!sessionId)
                 continue;
-            let title = ((row.title || '').trim() || (row.preview || '').trim() || this.extractTitleFromRawSummary(row.raw_summary_hex) || 'Cuộc trò chuyện mới').trim();
+            // Ưu tiên: 1. row.title -> 2. annotations pbtxt -> 3. row.preview -> 4. raw_summary -> 5. fallback
+            const annotTitle = this.getTitleFromAnnotations(baseDir, sessionId);
+            let title = ((row.title || '').trim() ||
+                (annotTitle || '').trim() ||
+                (row.preview || '').trim() ||
+                this.extractTitleFromRawSummary(row.raw_summary_hex) ||
+                '').trim();
             // Nhận diện Issue ID (#1234, Issue #1234, etc.) — chỉ chấp nhận dấu # để tránh bắt nhầm số thường
             let issueId = undefined;
             const issueMatch = title.match(/#(\d{1,7})\b/);
@@ -251,10 +328,24 @@ class SessionScanner {
                         isQuestion = true;
                     if (parsed.isWaitingApproval)
                         isNeedAccept = true;
+                    // Nếu title vẫn rỗng hoặc là generic "Cuộc trò chuyện mới", dùng câu hỏi đầu tiên của user
+                    if (!title || title === 'Cuộc trò chuyện mới' || title === 'New Conversation' || title === 'Untitled') {
+                        if (parsed.firstUserPrompt) {
+                            title = parsed.firstUserPrompt.replace(/[\r\n]+/g, ' ').trim();
+                        }
+                    }
                 }
                 catch (err) {
                     console.error('Lỗi parse transcript cho session', sessionId, err);
                 }
+            }
+            // Đảm bảo title luôn có giá trị và chỉ trên 1 dòng
+            if (!title) {
+                title = 'Cuộc trò chuyện mới';
+            }
+            title = title.replace(/[\r\n]+/g, ' ').trim();
+            if (title.length > 80) {
+                title = title.slice(0, 80).trim() + '...';
             }
             // Xác định trạng thái cuối
             let status = 'done';
@@ -322,6 +413,7 @@ class SessionScanner {
         let cacheTokens = 0;
         let turnCount = 0;
         let lastUserPrompt = '';
+        let firstUserPrompt = '';
         let lastAssistantResponse = '';
         let modelName = 'Gemini 3.8 Flash';
         let detectedSubRepo = undefined;
@@ -352,6 +444,9 @@ class SessionScanner {
                             modelName = modelMatch[1].trim();
                         }
                         lastUserPrompt = prompt.slice(0, 300);
+                        if (!firstUserPrompt && prompt) {
+                            firstUserPrompt = prompt.slice(0, 150);
+                        }
                     }
                 }
                 else if (step.type === 'SYSTEM_MESSAGE') {
@@ -398,8 +493,11 @@ class SessionScanner {
                 if (endIdx >= 0)
                     body = body.slice(0, endIdx);
                 body = body.trim();
-                if (body)
+                if (body) {
                     lastUserPrompt = body.slice(0, 300);
+                    if (!firstUserPrompt)
+                        firstUserPrompt = body.slice(0, 150);
+                }
             }
         }
         let isWaitingQuestion = false;
@@ -418,6 +516,7 @@ class SessionScanner {
             cacheTokens,
             turnCount,
             lastUserPrompt,
+            firstUserPrompt,
             lastAssistantResponse,
             modelName,
             detectedSubRepo,

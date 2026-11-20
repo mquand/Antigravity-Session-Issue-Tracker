@@ -1534,11 +1534,9 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
       font-size: 13px;
       color: var(--text-main);
       line-height: 1.45;
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
+      white-space: nowrap;
       overflow: hidden;
-      word-break: break-word;
+      text-overflow: ellipsis;
       width: 100%;
     }
 
