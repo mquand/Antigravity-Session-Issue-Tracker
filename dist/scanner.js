@@ -111,7 +111,7 @@ class SessionScanner {
         let summaryRows = [];
         if (fs.existsSync(dbPath)) {
             try {
-                const query = `SELECT conversation_id, title, preview, step_count, last_modified_time, workspace_uris, status, not_fully_idle, killed, last_user_input_time, parent_conversation_id, group_id FROM conversation_summaries ORDER BY last_modified_time DESC LIMIT 100;`;
+                const query = `SELECT conversation_id, title, preview, step_count, last_modified_time, workspace_uris, status, not_fully_idle, killed, last_user_input_time, parent_conversation_id, group_id, hex(raw_summary) AS raw_summary_hex FROM conversation_summaries ORDER BY last_modified_time DESC LIMIT 100;`;
                 const stdout = child_process.execSync(`sqlite3 -json "${dbPath}" "${query}"`, { timeout: 3000, encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'], maxBuffer: 10 * 1024 * 1024 });
                 if (stdout && stdout.trim()) {
                     summaryRows = JSON.parse(stdout.trim());
@@ -156,7 +156,7 @@ class SessionScanner {
             const sessionId = row.conversation_id;
             if (!sessionId)
                 continue;
-            let title = (row.title || row.preview || 'Cuộc trò chuyện mới').trim();
+            let title = ((row.title || '').trim() || (row.preview || '').trim() || this.extractTitleFromRawSummary(row.raw_summary_hex) || 'Cuộc trò chuyện mới').trim();
             // Nhận diện Issue ID (#1234, Issue #1234, etc.) — chỉ chấp nhận dấu # để tránh bắt nhầm số thường
             let issueId = undefined;
             const issueMatch = title.match(/#(\d{1,7})\b/);
@@ -207,6 +207,7 @@ class SessionScanner {
             if (cached &&
                 cached.cacheVersion === this.CACHE_VERSION &&
                 cached.mtimeMs === mtimeMs &&
+                cached.session.title === title &&
                 !isActive) {
                 const s = { ...cached.session };
                 s.statusMessage = this.formatRelativeTime(s.updatedAt);
@@ -325,6 +326,7 @@ class SessionScanner {
         let modelName = 'Gemini 3.8 Flash';
         let detectedSubRepo = undefined;
         let lastStep = null;
+        let firstSystemMessage = '';
         const fileStream = fs.createReadStream(filePath, { encoding: 'utf8', highWaterMark: 64 * 1024 });
         const rl = readline.createInterface({
             input: fileStream,
@@ -350,6 +352,11 @@ class SessionScanner {
                             modelName = modelMatch[1].trim();
                         }
                         lastUserPrompt = prompt.slice(0, 300);
+                    }
+                }
+                else if (step.type === 'SYSTEM_MESSAGE') {
+                    if (!firstSystemMessage && step.content) {
+                        firstSystemMessage = String(step.content);
                     }
                 }
                 else if (step.type === 'PLANNER_RESPONSE') {
@@ -382,6 +389,19 @@ class SessionScanner {
             }
             catch { }
         }
+        // Sub-agent sessions không có USER_INPUT — prompt thật nằm trong SYSTEM_MESSAGE delegation
+        if (!lastUserPrompt && firstSystemMessage) {
+            const idx = firstSystemMessage.indexOf('content=');
+            if (idx >= 0) {
+                let body = firstSystemMessage.slice(idx + 'content='.length).trim();
+                const endIdx = body.indexOf('</SYSTEM_MESSAGE>');
+                if (endIdx >= 0)
+                    body = body.slice(0, endIdx);
+                body = body.trim();
+                if (body)
+                    lastUserPrompt = body.slice(0, 300);
+            }
+        }
         let isWaitingQuestion = false;
         let isWaitingApproval = false;
         if (lastStep && lastStep.tool_calls && Array.isArray(lastStep.tool_calls)) {
@@ -404,6 +424,164 @@ class SessionScanner {
             isWaitingQuestion,
             isWaitingApproval
         };
+    }
+    // Sub-agent sessions (nesting_depth >= 1) có title/preview rỗng trong conversation_summaries.
+    // Title thật nằm trong raw_summary (protobuf): message agent-info chứa cặp (agent_name, task title).
+    static extractTitleFromRawSummary(rawSummaryHex) {
+        if (!rawSummaryHex || typeof rawSummaryHex !== 'string')
+            return undefined;
+        let buf;
+        try {
+            buf = Buffer.from(rawSummaryHex, 'hex');
+        }
+        catch {
+            return undefined;
+        }
+        if (!buf || buf.length === 0)
+            return undefined;
+        const candidates = [];
+        this.collectProtobufStrings(buf, 0, candidates);
+        // Ưu tiên 1: cặp (agent_name ngắn, title) trong cùng một sub-message
+        const paired = this.findAgentTitlePair(buf);
+        if (paired)
+            return paired;
+        // Ưu tiên 2: chuỗi "giống title" nhất trong toàn blob
+        let best;
+        let bestScore = 0;
+        for (const c of candidates) {
+            const score = this.scoreTitleCandidate(c);
+            if (score > bestScore) {
+                bestScore = score;
+                best = c.trim();
+            }
+        }
+        return bestScore >= 4 ? best : undefined;
+    }
+    static findAgentTitlePair(buf, depth = 0) {
+        if (depth > 4 || buf.length < 2)
+            return undefined;
+        const fields = this.readProtobufFields(buf);
+        if (!fields)
+            return undefined;
+        const strings = [];
+        for (const f of fields) {
+            if (f.wire === 2 && f.chunk) {
+                const text = f.chunk.toString('utf8');
+                if (this.isLikelyPlainText(text))
+                    strings.push(text);
+            }
+        }
+        if (strings.length >= 2) {
+            const agentName = strings[0].trim();
+            const maybeTitle = strings[1].trim();
+            if (agentName.length >= 2 && agentName.length <= 30 &&
+                /^[\p{L}\p{N}_-]+$/u.test(agentName) &&
+                this.scoreTitleCandidate(maybeTitle) >= 3) {
+                return maybeTitle;
+            }
+        }
+        for (const f of fields) {
+            if (f.wire === 2 && f.chunk && f.chunk.length >= 2) {
+                const nested = this.findAgentTitlePair(f.chunk, depth + 1);
+                if (nested)
+                    return nested;
+            }
+        }
+        return undefined;
+    }
+    static collectProtobufStrings(buf, depth, out) {
+        if (depth > 4 || buf.length < 2)
+            return;
+        const fields = this.readProtobufFields(buf);
+        if (!fields)
+            return;
+        for (const f of fields) {
+            if (f.wire === 2 && f.chunk) {
+                const text = f.chunk.toString('utf8');
+                if (this.isLikelyPlainText(text))
+                    out.push(text);
+                this.collectProtobufStrings(f.chunk, depth + 1, out);
+            }
+        }
+    }
+    static readProtobufFields(buf) {
+        const fields = [];
+        let i = 0;
+        while (i < buf.length) {
+            let tag = 0, shift = 0;
+            while (i < buf.length) {
+                const b = buf[i++];
+                tag |= (b & 0x7f) << shift;
+                if ((b & 0x80) === 0)
+                    break;
+                shift += 7;
+                if (shift > 28)
+                    return null;
+            }
+            const wire = tag & 7;
+            if (wire === 0) {
+                while (i < buf.length && (buf[i++] & 0x80) !== 0) { }
+            }
+            else if (wire === 1) {
+                i += 8;
+            }
+            else if (wire === 5) {
+                i += 4;
+            }
+            else if (wire === 2) {
+                let len = 0;
+                shift = 0;
+                while (i < buf.length) {
+                    const b = buf[i++];
+                    len |= (b & 0x7f) << shift;
+                    if ((b & 0x80) === 0)
+                        break;
+                    shift += 7;
+                    if (shift > 28)
+                        return null;
+                }
+                if (i + len > buf.length)
+                    return null;
+                if (len > 0) {
+                    fields.push({ wire, chunk: buf.subarray(i, i + len) });
+                }
+                i += len;
+            }
+            else {
+                return null; // wire types 3/4 (groups) không hỗ trợ
+            }
+            if (i > buf.length)
+                return null;
+        }
+        return fields.length > 0 ? fields : null;
+    }
+    static isLikelyPlainText(s) {
+        if (!s || s.length > 500)
+            return false;
+        if (/[\u0000-\u001F\u007F-\u009F\uFFFD]/.test(s))
+            return false;
+        return /[\p{L}]/u.test(s);
+    }
+    static scoreTitleCandidate(s) {
+        const t = s.trim();
+        if (t.length < 3 || t.length > 140 || t.includes('\n'))
+            return 0;
+        if (/[a-z][a-z0-9+.-]*:\/\//i.test(t) || /^[a-zA-Z]:[\\/]/.test(t))
+            return 0;
+        if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(t))
+            return 0;
+        if (/^[0-9a-f]{24,}$/i.test(t))
+            return 0;
+        if (!/[\p{L}]/u.test(t))
+            return 0;
+        let score = 1;
+        if (/\s/.test(t))
+            score += 2;
+        if (t.length >= 10 && t.length <= 90)
+            score += 1;
+        if (/\p{Lu}/u.test(t))
+            score += 1;
+        return score;
     }
     static getGitInfoFromDir(dirPath) {
         try {

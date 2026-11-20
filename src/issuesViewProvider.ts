@@ -697,6 +697,13 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
             primary.issueId = withIssue.issueId;
           }
         }
+        // Nếu primary chỉ có title generic/rỗng (vd sub-agent session), mượn title thật từ member khác
+        if (getNormTitle(primary) === undefined) {
+          const withTitle = list.find(item => getNormTitle(item) !== undefined);
+          if (withTitle) {
+            primary.title = withTitle.title;
+          }
+        }
         primary.subSessions = list.slice(1);
         result.push(primary);
       }
