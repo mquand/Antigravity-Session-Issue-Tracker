@@ -294,7 +294,6 @@ class SessionScanner {
             // Đọc phân tích chi tiết transcript.jsonl
             let inTokens = 0;
             let outTokens = 0;
-            let cacheTokens = 0;
             let turnCount = row.step_count || 0;
             let lastUserPrompt = '';
             let lastAssistantResponse = '';
@@ -307,7 +306,6 @@ class SessionScanner {
                     const parsed = await this.fastParseTranscript(transcriptPath, cwd);
                     inTokens = parsed.inTokens;
                     outTokens = parsed.outTokens;
-                    cacheTokens = parsed.cacheTokens;
                     if (parsed.turnCount > 0)
                         turnCount = parsed.turnCount;
                     if (parsed.lastUserPrompt)

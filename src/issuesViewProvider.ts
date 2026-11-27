@@ -705,6 +705,17 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
           }
         }
         primary.subSessions = list.slice(1);
+        // Nếu có sub-session đang active (need_accept / question / running) mà primary đang done/failed,
+        // nâng cấp trạng thái hiển thị của nhóm để không bị sót trạng thái running/need_accept.
+        const activePriority: Record<string, number> = { need_accept: 3, question: 2, running: 1 };
+        let bestPrio = activePriority[primary.status] || 0;
+        for (const sub of primary.subSessions) {
+          const prio = activePriority[sub.status] || 0;
+          if (prio > bestPrio) {
+            bestPrio = prio;
+            primary.status = sub.status;
+          }
+        }
         result.push(primary);
       }
     }
@@ -777,6 +788,11 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
             value: needAcceptCount,
             tooltip: lang === 'en' ? `${needAcceptCount} tasks waiting approval` : `${needAcceptCount} task đang chờ duyệt`
           };
+        } else if (runningCount > 0) {
+          view.badge = {
+            value: runningCount,
+            tooltip: lang === 'en' ? `${runningCount} tasks running` : `${runningCount} task đang chạy`
+          };
         } else if (failedCount > 0) {
           view.badge = {
             value: failedCount,
@@ -802,7 +818,6 @@ export class IssuesViewProvider implements vscode.WebviewViewProvider {
       }
 
       const todayCount = groupedSessions.filter(s => s.updatedAt >= startOfToday.getTime()).length;
-      const activeTotalCount = needAcceptCount + runningCount + failedCount + needReviewCount;
 
       const md = new vscode.MarkdownString('', true);
       md.isTrusted = true;
